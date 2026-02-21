@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 from scipy.stats import percentileofscore
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use("Agg")          # headless – no display needed
 import matplotlib.pyplot as plt
 import seaborn as sns
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -282,7 +282,7 @@ def fetch_yf_parallel(tickers: list) -> dict:
                            desc="Yahoo Finance (parallel)"):
             t, info = future.result()
             results[t] = info
-    return results
+    return results   # always a dict, never None
 
 
 def fetch_price_multi(tickers: list) -> pd.DataFrame:
@@ -322,6 +322,7 @@ def add_price_momentum(df: pd.DataFrame, tickers: list) -> pd.DataFrame:
     all_nan = df[["perf_12m", "perf_6m", "perf_3m", "perf_1m"]].isna().all(axis=1)
     df.loc[all_nan, "momentum_composite"] = np.nan
 
+    # Clip extreme outliers (splits, data errors)
     for col in ["perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite"]:
         df[col] = df[col].clip(-0.80, 5.0)
     return df
@@ -339,6 +340,10 @@ def _safe(val, default=np.nan):
         return default if np.isnan(f) else f
     except Exception:
         return default
+
+
+def _coverage(row: pd.Series, cols: list) -> float:
+    return sum(1 for c in cols if not pd.isna(row.get(c, np.nan))) / max(len(cols), 1)
 
 
 def compute_piotroski(row: pd.Series) -> float:
@@ -501,6 +506,7 @@ def sector_percentile(df: pd.DataFrame, col: str,
 # ════════════════════════════════════════════════════════════
 
 def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
+    # 1. Valuation
     df["s_pe"]        = sector_percentile(df, "trailingPE",                  False)
     df["s_peg"]       = sector_percentile(df, "pegRatio",                    False)
     df["s_ev_ebitda"] = sector_percentile(df, "enterpriseToEbitda",           False)
@@ -508,6 +514,7 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_pb"]        = sector_percentile(df, "priceToBook",                  False)
     df["pillar_valuation"] = df[["s_pe","s_peg","s_ev_ebitda","s_ps","s_pb"]].mean(axis=1, skipna=True)
 
+    # 2. Profitability
     df["s_roe"]    = sector_percentile(df, "returnOnEquity", True)
     df["s_roa"]    = sector_percentile(df, "returnOnAssets", True)
     df["s_roic"]   = sector_percentile(df, "roic",           True)
@@ -515,30 +522,36 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_tr_roe"] = sector_percentile(df, "tr_roe",         True)
     df["pillar_profitability"] = df[["s_roe","s_roa","s_roic","s_pm","s_tr_roe"]].mean(axis=1, skipna=True)
 
+    # 3. Growth
     df["s_rev_g"]      = sector_percentile(df, "revenueGrowth",   True)
     df["s_earn_g"]     = sector_percentile(df, "earningsGrowth",  True)
     df["s_fcf_m"]      = sector_percentile(df, "fcf_margin",      True)
     df["s_tr_asset_g"] = sector_percentile(df, "tr_asset_growth", True)
     df["pillar_growth"] = df[["s_rev_g","s_earn_g","s_fcf_m","s_tr_asset_g"]].mean(axis=1, skipna=True)
 
+    # 4. Earnings Quality
     df["s_eq"] = sector_percentile(df, "earnings_quality_score", True)
     df["pillar_earnings_quality"] = df["s_eq"]
 
+    # 5. FCF Quality
     df["s_fcf_yield"] = sector_percentile(df, "fcf_yield",  True)
     df["s_fcf_ni"]    = sector_percentile(df, "fcf_to_ni",  True)
     df["pillar_fcf"]  = df[["s_fcf_yield","s_fcf_ni","s_fcf_m"]].mean(axis=1, skipna=True)
 
+    # 6. Financial Health
     df["s_cr"]     = sector_percentile(df, "currentRatio", True)
     df["s_de"]     = sector_percentile(df, "debtToEquity", False)
     df["s_altman"] = sector_percentile(df, "altman_z",     True)
     df["pillar_health"] = df[["s_cr","s_de","s_altman"]].mean(axis=1, skipna=True)
 
+    # 7. Momentum
     df["s_mom"]      = sector_percentile(df, "momentum_composite", True)
     df["s_beta"]     = sector_percentile(df, "beta",               False)
     df["s_tr_mom12"] = sector_percentile(df, "tr_momentum_12m",    True)
     df["s_tr_sma"]   = sector_percentile(df, "tr_sma_num",         True)
     df["pillar_momentum"] = df[["s_mom","s_beta","s_tr_mom12","s_tr_sma"]].mean(axis=1, skipna=True)
 
+    # 8. Analyst + TipRanks Sentiment
     df["s_rec"]          = sector_percentile(df, "recommendationMean",   False)
     df["s_pt_upside"]    = sector_percentile(df, "pt_upside",            True)
     df["s_tr_smart"]     = sector_percentile(df, "tr_smart_score",       True)
@@ -554,6 +567,7 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
         "s_tr_blogger","s_tr_hedge","s_tr_insider","s_tr_inv_chg","s_tr_pt",
     ]].mean(axis=1, skipna=True)
 
+    # 9. Piotroski
     df["s_piotroski"]      = sector_percentile(df, "piotroski_score", True)
     df["pillar_piotroski"] = df["s_piotroski"]
 
@@ -640,10 +654,6 @@ def compute_coverage(df: pd.DataFrame) -> pd.Series:
     return df.apply(lambda r: _coverage(r, CORE_METRIC_COLS), axis=1)
 
 
-def _coverage(row: pd.Series, cols: list) -> float:
-    return sum(1 for c in cols if not pd.isna(row.get(c, np.nan))) / max(len(cols), 1)
-
-
 def add_sector_context(df: pd.DataFrame) -> pd.DataFrame:
     pillar_cols = list(PILLAR_MAP.values())
     sector_med  = (df.groupby("sector")[pillar_cols + ["composite_score"]]
@@ -728,44 +738,324 @@ EXPORT_COLS = [
     "vs_sector",
 ]
 
-FRIENDLY_NAMES = { ... }  # (השאר כמו שהיה)
+FRIENDLY_NAMES = {
+    "rank": "Rank", "ticker": "Ticker", "name": "Company",
+    "sector": "Sector", "industry": "Industry",
+    "composite_score":         "Composite Score",
+    "valuation_score":         "Cheap/Expensive (1-100)",
+    "pillar_valuation":        "Valuation",
+    "pillar_profitability":    "Profitability",
+    "pillar_growth":           "Growth",
+    "pillar_earnings_quality": "Earnings Quality",
+    "pillar_fcf":              "FCF Quality",
+    "pillar_health":           "Financial Health",
+    "pillar_momentum":         "Momentum",
+    "pillar_analyst":          "Analyst+Sentiment",
+    "pillar_piotroski":        "Piotroski",
+    "coverage":                "Data Coverage %",
+    "tr_smart_score":          "TR SmartScore",
+    "tr_analyst_consensus":    "TR Consensus Label",
+    "tr_consensus_num":        "TR Consensus (0-5)",
+    "tr_news_sentiment":       "TR News Sentiment",
+    "tr_news_bullish":         "TR News Bullish %",
+    "tr_blogger_bullish":      "TR Blogger Bullish %",
+    "tr_hedge_trend":          "TR Hedge Fund Trend",
+    "tr_hedge_trend_num":      "TR Hedge Num",
+    "tr_insider_trend":        "TR Insider Trend",
+    "tr_insider_3m_usd":       "TR Insider 3M ($)",
+    "tr_investor_chg_30d":     "TR Investor Chg 30D %",
+    "tr_investor_chg_7d":      "TR Investor Chg 7D %",
+    "tr_momentum_12m":         "TR Tech Mom 12M %",
+    "tr_sma":                  "TR SMA Signal",
+    "tr_price_target":         "TR Price Target ($)",
+    "tr_pt_upside":            "TR PT Upside %",
+    "tr_roe":                  "TR ROE %",
+    "tr_asset_growth":         "TR Asset Growth %",
+    "trailingPE":              "P/E (TTM)",
+    "forwardPE":               "Forward P/E",
+    "pegRatio":                "PEG",
+    "priceToSalesTrailing12Months": "P/S",
+    "priceToBook":             "P/B",
+    "enterpriseToEbitda":      "EV/EBITDA",
+    "returnOnEquity":          "ROE %",
+    "returnOnAssets":          "ROA %",
+    "roic":                    "ROIC %",
+    "profitMargins":           "Net Margin %",
+    "grossMargins":            "Gross Margin %",
+    "operatingMargins":        "Op. Margin %",
+    "revenueGrowth":           "Rev Growth %",
+    "earningsGrowth":          "EPS Growth %",
+    "fcf_yield":               "FCF Yield %",
+    "fcf_margin":              "FCF Margin %",
+    "fcf_to_ni":               "FCF/Net Income",
+    "earnings_quality_score":  "Earnings Quality (0-5)",
+    "currentRatio":            "Current Ratio",
+    "debtToEquity":            "Debt/Equity",
+    "dividendYield":           "Div Yield %",
+    "payoutRatio":             "Payout Ratio %",
+    "beta":                    "Beta",
+    "perf_12m":                "Perf 12M %",
+    "perf_6m":                 "Perf 6M %",
+    "perf_3m":                 "Perf 3M %",
+    "perf_1m":                 "Perf 1M %",
+    "momentum_composite":      "Momentum Composite %",
+    "altman_z":                "Altman Z",
+    "piotroski_score":         "Piotroski F",
+    "recommendationMean":      "Yahoo Analyst (1=Buy)",
+    "numberOfAnalystOpinions": "# Analysts",
+    "pt_upside":               "Yahoo PT Upside %",
+    "marketCap":               "Market Cap ($)",
+    "enterpriseValue":         "EV ($)",
+    "currentPrice":            "Price ($)",
+    "averageVolume":           "Avg Volume",
+    "vs_sector":               "vs Sector Median",
+}
 
-PCT_COLS_DECIMAL = { ... }
-PCT_COLS_FRACTION = { ... }
+PCT_COLS_DECIMAL = {
+    "returnOnEquity", "returnOnAssets", "roic",
+    "profitMargins", "grossMargins", "operatingMargins",
+    "revenueGrowth", "earningsGrowth",
+    "fcf_yield", "fcf_margin",
+    "dividendYield", "payoutRatio",
+    "pt_upside", "coverage",
+}
+
+PCT_COLS_FRACTION = {
+    "tr_news_bullish", "tr_blogger_bullish",
+    "tr_investor_chg_30d", "tr_investor_chg_7d",
+    "tr_momentum_12m", "tr_roe", "tr_asset_growth", "tr_pt_upside",
+    "perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite",
+}
+
 ALL_PCT_COLS = PCT_COLS_DECIMAL | PCT_COLS_FRACTION
 
+
 def style_and_export(df: pd.DataFrame, filepath: str):
-    # (הקוד המלא כמו שהיה)
-    ...
+    out_df = df.reindex(columns=[c for c in EXPORT_COLS if c in df.columns])
+    out_df = out_df.rename(columns=FRIENDLY_NAMES)
+    for c in ALL_PCT_COLS:
+        fn = FRIENDLY_NAMES.get(c, c)
+        if fn in out_df.columns:
+            out_df[fn] = (out_df[fn] * 100).round(2)
+
+    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+        out_df.to_excel(writer, sheet_name="Rankings", index=False)
+        sector_cols = [c for c in list(PILLAR_MAP.values())
+                       + ["composite_score", "valuation_score", "tr_smart_score"]
+                       if c in df.columns]
+        df.groupby("sector")[sector_cols].agg(["median","mean","count"]).round(1).to_excel(
+            writer, sheet_name="Sector Analysis")
+        out_df.head(50).to_excel(writer, sheet_name="Top 50", index=False)
+        wb = writer.book
+        for sn in ["Rankings", "Top 50"]:
+            _format_sheet(wb[sn])
+
+    print(f"✅  Excel → {filepath}")
+
 
 def _format_sheet(ws):
-    # (הקוד המלא כמו שהיה)
-    ...
+    HEADER_FILL    = PatternFill("solid", fgColor="1F4E79")
+    HEADER_TR_FILL = PatternFill("solid", fgColor="154360")
+    ALT_FILL       = PatternFill("solid", fgColor="EBF3FB")
+    BORDER = Border(bottom=Side(style="thin", color="BFBFBF"),
+                    right=Side(style="thin",  color="BFBFBF"))
+
+    score_idx = val_idx = smart_idx = None
+    for idx, cell in enumerate(ws[1], 1):
+        val = str(cell.value or "")
+        cell.font      = Font(bold=True, color="FFFFFF", size=10)
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border    = BORDER
+        cell.fill      = HEADER_TR_FILL if val.startswith("TR") else HEADER_FILL
+        if "Composite Score" in val: score_idx = idx
+        if "Cheap/Expensive" in val: val_idx   = idx
+        if "SmartScore"      in val: smart_idx = idx
+
+    for ri, row in enumerate(ws.iter_rows(min_row=2), 2):
+        for cell in row:
+            cell.border = BORDER
+            cell.alignment = Alignment(horizontal="center")
+            if ri % 2 == 0:
+                cell.fill = ALT_FILL
+
+    for col in ws.columns:
+        ml = max((len(str(c.value)) if c.value else 0) for c in col)
+        ws.column_dimensions[get_column_letter(col[0].column)].width = min(ml + 2, 28)
+
+    for ci in [score_idx, val_idx, smart_idx]:
+        if ci:
+            cl = get_column_letter(ci)
+            ws.conditional_formatting.add(
+                f"{cl}2:{cl}{ws.max_row}",
+                ColorScaleRule(start_type="min",       start_color="FF4444",
+                               mid_type="percentile",  mid_value=50, mid_color="FFFF00",
+                               end_type="max",         end_color="00B050"),
+            )
+    ws.freeze_panes = "D2"
+
 
 # ════════════════════════════════════════════════════════════
-#  VISUALISATIONS
+#  VISUALISATIONS  (Agg backend – no display)
 # ════════════════════════════════════════════════════════════
 
 def plot_all(df: pd.DataFrame):
-    # (הקוד המלא כמו שהיה)
-    ...
+    sns.set_style("whitegrid")
+
+    # Top 30 composite
+    fig, ax = plt.subplots(figsize=(14, 8))
+    top30  = df.nlargest(30, "composite_score")
+    colors = plt.cm.RdYlGn(top30["composite_score"] / 100)
+    bars   = ax.barh(top30["ticker"][::-1], top30["composite_score"][::-1],
+                     color=colors[::-1], edgecolor="white")
+    ax.set_xlim(0, 108)
+    ax.set_xlabel("Composite Score", fontsize=12)
+    ax.set_title("Top 30 S&P 500 – Composite Score v5.2", fontsize=14, fontweight="bold")
+    for bar, s in zip(bars, top30["composite_score"][::-1]):
+        ax.text(bar.get_width() + 0.4, bar.get_y() + bar.get_height() / 2,
+                f"{s:.1f}", va="center", fontsize=8)
+    plt.tight_layout()
+    plt.savefig("artifacts/top30_composite.png", dpi=150)
+    plt.close()
+
+    # Sector medians
+    fig, ax = plt.subplots(figsize=(13, 5))
+    sec = df.groupby("sector")["composite_score"].median().sort_values(ascending=False)
+    sec.plot(kind="bar", ax=ax,
+             color=plt.cm.coolwarm_r(np.linspace(0, 1, len(sec))), edgecolor="white")
+    ax.set_title("Median Composite Score by Sector", fontsize=13, fontweight="bold")
+    ax.tick_params(axis="x", rotation=40)
+    plt.tight_layout()
+    plt.savefig("artifacts/sector_scores.png", dpi=150)
+    plt.close()
+
+    # Scatter cheap vs quality
+    fig, ax = plt.subplots(figsize=(10, 7))
+    sc = ax.scatter(df["valuation_score"], df["composite_score"],
+                    c=df["composite_score"], cmap="RdYlGn", alpha=0.65, s=35)
+    plt.colorbar(sc, label="Composite Score")
+    quad = df[(df["valuation_score"] > 65) & (df["composite_score"] > 65)]
+    for _, r in quad.iterrows():
+        ax.annotate(r["ticker"], (r["valuation_score"], r["composite_score"]),
+                    fontsize=7, alpha=0.85)
+    ax.axvline(50, color="grey", ls="--", alpha=0.4)
+    ax.axhline(df["composite_score"].median(), color="grey", ls="--", alpha=0.4)
+    ax.set_xlabel("Valuation Score (100=Cheap)")
+    ax.set_ylabel("Composite Score")
+    ax.set_title("Quality vs Valuation Quadrant Map", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    plt.savefig("artifacts/valuation_vs_quality.png", dpi=150)
+    plt.close()
+
+    # SmartScore distribution
+    if "tr_smart_score" in df.columns and df["tr_smart_score"].notna().sum() > 10:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for sv in sorted(df["tr_smart_score"].dropna().unique()):
+            ax.bar(sv, (df["tr_smart_score"] == sv).sum(),
+                   color=plt.cm.RdYlGn(sv / 10), edgecolor="white", width=0.8)
+        ax.set_xticks(range(1, 11))
+        ax.set_xlabel("SmartScore")
+        ax.set_ylabel("# Stocks")
+        ax.set_title("TipRanks SmartScore Distribution", fontsize=13, fontweight="bold")
+        plt.tight_layout()
+        plt.savefig("artifacts/smartscore_dist.png", dpi=150)
+        plt.close()
+
+    # Multi-timeframe momentum top 20
+    if "perf_12m" in df.columns:
+        top20 = df.nlargest(20, "composite_score")
+        fig, ax = plt.subplots(figsize=(14, 6))
+        x, w = np.arange(len(top20)), 0.2
+        for i, (col, label, color) in enumerate([
+            ("perf_12m","12M","#1976D2"), ("perf_6m","6M","#42A5F5"),
+            ("perf_3m","3M","#81D4FA"),  ("perf_1m","1M","#B3E5FC"),
+        ]):
+            ax.bar(x + i*w, top20[col].fillna(0)*100, w,
+                   label=label, color=color, edgecolor="white")
+        ax.set_xticks(x + 1.5*w)
+        ax.set_xticklabels(top20["ticker"], rotation=45, fontsize=8)
+        ax.set_ylabel("Return %")
+        ax.legend()
+        ax.set_title("Multi-Timeframe Momentum – Top 20", fontsize=13, fontweight="bold")
+        ax.axhline(0, color="black", linewidth=0.8)
+        plt.tight_layout()
+        plt.savefig("artifacts/momentum_decomp.png", dpi=150)
+        plt.close()
+
+    # Radar top 5
+    _plot_radar(df.nlargest(5, "composite_score"))
+
 
 def _plot_radar(df_top: pd.DataFrame):
-    # (הקוד המלא כמו שהיה)
-    ...
+    pillar_cols = list(PILLAR_MAP.values())
+    labels  = [c.replace("pillar_","").replace("_","\n").title() for c in pillar_cols]
+    N       = len(pillar_cols)
+    angles  = [n / N * 2 * np.pi for n in range(N)] + [0]
+    colors  = ["#2196F3","#4CAF50","#FF9800","#E91E63","#9C27B0"]
+
+    fig, axes = plt.subplots(1, min(5, len(df_top)), figsize=(20, 4),
+                             subplot_kw=dict(polar=True))
+    if len(df_top) == 1:
+        axes = [axes]
+
+    for i, (_, row) in enumerate(df_top.iterrows()):
+        ax   = axes[i]
+        vals = [_safe(row.get(c), 50) for c in pillar_cols] + [_safe(row.get(pillar_cols[0]), 50)]
+        ax.plot(angles, vals, color=colors[i], linewidth=2)
+        ax.fill(angles, vals, color=colors[i], alpha=0.22)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels, size=6.5)
+        ax.set_ylim(0, 100)
+        ss     = row.get("tr_smart_score", np.nan)
+        ss_str = f"  SS:{ss:.0f}" if not pd.isna(ss) else ""
+        ax.set_title(f"{row['ticker']}\n{row['composite_score']:.1f}{ss_str}",
+                     size=9, fontweight="bold", pad=10)
+
+    fig.suptitle("Pillar Breakdown – Top 5 (v5.2)", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    plt.savefig("artifacts/top5_radar.png", dpi=150)
+    plt.close()
+
 
 # ════════════════════════════════════════════════════════════
 #  SUMMARY PRINT
 # ════════════════════════════════════════════════════════════
 
 def _print_summary(df: pd.DataFrame):
-    # (הקוד המלא כמו שהיה)
-    ...
+    print("\n" + "=" * 65)
+    print("  TOP 20 STOCKS")
+    print("=" * 65)
+    show = ["rank","ticker","name","sector","composite_score",
+            "valuation_score","tr_smart_score","tr_analyst_consensus",
+            "earnings_quality_score","piotroski_score","altman_z","coverage"]
+    print(df[[c for c in show if c in df.columns]].head(20).to_string(index=False))
+
+    print("\n  SECTOR MEDIAN COMPOSITE SCORES")
+    print("-" * 45)
+    print(df.groupby("sector")["composite_score"].median()
+            .sort_values(ascending=False).round(1).to_string())
+
+    if "tr_smart_score" in df.columns and df["tr_smart_score"].notna().any():
+        top_ss = df[df["tr_smart_score"] >= 8][
+            ["rank","ticker","composite_score","tr_smart_score",
+             "tr_analyst_consensus","sector"]]
+        if not top_ss.empty:
+            print(f"\n  TIPRANKS SMARTSCORE >= 8  ({len(top_ss)} stocks)")
+            print("-" * 55)
+            print(top_ss.to_string(index=False))
+
 
 # ════════════════════════════════════════════════════════════
-#  MERGE BREAKOUT SIGNALS (הגרסה שעבדה)
+#  JSON EXPORT  (for GitHub Pages dashboard)
 # ════════════════════════════════════════════════════════════
+
 def merge_breakout_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge breakout scan signals from MOZES_stock-screener.
+    Reads breakout_signals.json from repo root (fetched by Actions workflow).
+    Adds columns: breakout_score, breakout_rank, breakout_phase,
+                  breakout_rr, breakout_rs, breakout_stop, has_vcp,
+                  vcp_quality, breakout_entry_quality, breakout_reasons
+    """
     import json as _json, os as _os
     bp = "breakout_signals.json"
     if not _os.path.exists(bp):
@@ -779,7 +1069,7 @@ def merge_breakout_signals(df: pd.DataFrame) -> pd.DataFrame:
         df["breakout_reasons"] = ""
         return df
 
-    with open(bp, encoding="utf-8") as f:
+    with open(bp) as f:
         data = _json.load(f)
 
     signals = {s["ticker"]: s for s in data.get("top_signals", [])}
@@ -788,35 +1078,34 @@ def merge_breakout_signals(df: pd.DataFrame) -> pd.DataFrame:
     def _get(ticker, field, default=np.nan):
         return signals.get(ticker, {}).get(field, default)
 
-    df["breakout_score"]         = df["ticker"].apply(lambda t: _get(t, "breakout_score"))
-    df["breakout_rank"]          = df["ticker"].apply(lambda t: _get(t, "rank"))
-    df["breakout_phase"]         = df["ticker"].apply(lambda t: _get(t, "phase"))
-    df["breakout_rr"]            = df["ticker"].apply(lambda t: _get(t, "risk_reward"))
-    df["breakout_rs"]            = df["ticker"].apply(lambda t: _get(t, "rs"))
-    df["breakout_stop"]          = df["ticker"].apply(lambda t: _get(t, "stop_loss"))
-    df["has_vcp"]                = df["ticker"].apply(lambda t: signals.get(t, {}).get("has_vcp", False))
-    df["vcp_quality"]            = df["ticker"].apply(lambda t: _get(t, "vcp_quality"))
-    df["breakout_entry_quality"] = df["ticker"].apply(lambda t: signals.get(t, {}).get("entry_quality", ""))
-    df["breakout_reasons"]       = df["ticker"].apply(lambda t: " | ".join(signals.get(t, {}).get("reasons", [])))
+    df["breakout_score"]         = df["Ticker"].apply(lambda t: _get(t, "breakout_score"))
+    df["breakout_rank"]          = df["Ticker"].apply(lambda t: _get(t, "rank"))
+    df["breakout_phase"]         = df["Ticker"].apply(lambda t: _get(t, "phase"))
+    df["breakout_rr"]            = df["Ticker"].apply(lambda t: _get(t, "risk_reward"))
+    df["breakout_rs"]            = df["Ticker"].apply(lambda t: _get(t, "rs"))
+    df["breakout_stop"]          = df["Ticker"].apply(lambda t: _get(t, "stop_loss"))
+    df["has_vcp"]                = df["Ticker"].apply(lambda t: signals.get(t, {}).get("has_vcp", False))
+    df["vcp_quality"]            = df["Ticker"].apply(lambda t: _get(t, "vcp_quality"))
+    df["breakout_entry_quality"] = df["Ticker"].apply(lambda t: signals.get(t, {}).get("entry_quality", ""))
+    df["breakout_reasons"]       = df["Ticker"].apply(lambda t: " | ".join(signals.get(t, {}).get("reasons", [])))
 
     n_overlap = df["breakout_score"].notna().sum()
-    print(f"  🔀 Overlap with S&P 500: {n_overlap} stocks")
+    print(f"  🔀 Overlap with S&P 500: {n_overlap} stocks in both systems")
     return df
 
 
-# ════════════════════════════════════════════════════════════
-#  JSON EXPORT
-# ════════════════════════════════════════════════════════════
 def export_json(df: pd.DataFrame):
+    """Export ranking data as sp500_data.json for the web dashboard."""
     def safe(v):
         if v is None: return None
         try:
             f = float(v)
-            return None if (f != f) else round(f, 4)
+            return None if (f != f) else round(f, 4)   # NaN → None
         except Exception:
             return str(v) if v else None
 
     def pct(v):
+        """Fields stored as 0-1 fraction → multiply ×100 for display."""
         r = safe(v)
         return round(r * 100, 2) if r is not None else None
 
@@ -828,8 +1117,10 @@ def export_json(df: pd.DataFrame):
             "company":        str(row.get("name", "")),
             "sector":         str(row.get("sector", "")),
             "industry":       str(row.get("industry", "")),
+            # Core scores
             "composite":      safe(row.get("composite_score")),
             "valuation":      safe(row.get("valuation_score")),
+            # Pillars
             "p_valuation":    safe(row.get("pillar_valuation")),
             "p_profitability":safe(row.get("pillar_profitability")),
             "p_growth":       safe(row.get("pillar_growth")),
@@ -839,6 +1130,7 @@ def export_json(df: pd.DataFrame):
             "p_momentum":     safe(row.get("pillar_momentum")),
             "p_analyst":      safe(row.get("pillar_analyst")),
             "p_piotroski":    safe(row.get("pillar_piotroski")),
+            # TipRanks
             "tr_smartscore":  safe(row.get("tr_smart_score")),
             "tr_consensus":   str(row.get("tr_analyst_consensus", "") or ""),
             "tr_pt_upside":   pct(row.get("tr_pt_upside")),
@@ -846,34 +1138,42 @@ def export_json(df: pd.DataFrame):
             "tr_blogger_bull":pct(row.get("tr_blogger_bullish")),
             "tr_insider":     str(row.get("tr_insider_trend", "") or ""),
             "tr_hedge":       str(row.get("tr_hedge_trend", "") or ""),
+            # Valuation multiples
             "pe":             safe(row.get("trailingPE")),
             "fwd_pe":         safe(row.get("forwardPE")),
             "peg":            safe(row.get("pegRatio")),
             "ps":             safe(row.get("priceToSalesTrailing12Months")),
             "pb":             safe(row.get("priceToBook")),
             "ev_ebitda":      safe(row.get("enterpriseToEbitda")),
+            # Profitability  (0-1 fraction → ×100)
             "roe":            pct(row.get("returnOnEquity")),
             "roa":            pct(row.get("returnOnAssets")),
             "roic":           pct(row.get("roic")),
             "net_margin":     pct(row.get("profitMargins")),
             "gross_margin":   pct(row.get("grossMargins")),
             "op_margin":      pct(row.get("operatingMargins")),
+            # Growth  (0-1 fraction → ×100)
             "rev_growth":     pct(row.get("revenueGrowth")),
             "eps_growth":     pct(row.get("earningsGrowth")),
+            # FCF  (0-1 fraction → ×100)
             "fcf_yield":      pct(row.get("fcf_yield")),
             "fcf_margin":     pct(row.get("fcf_margin")),
+            # Other
             "current_ratio":  safe(row.get("currentRatio")),
             "debt_equity":    safe(row.get("debtToEquity")),
             "div_yield":      pct(row.get("dividendYield")),
             "beta":           safe(row.get("beta")),
+            # Momentum  (0-1 fraction → ×100)
             "perf_12m":       pct(row.get("perf_12m")),
             "perf_6m":        pct(row.get("perf_6m")),
             "perf_3m":        pct(row.get("perf_3m")),
             "perf_1m":        pct(row.get("perf_1m")),
             "momentum":       pct(row.get("momentum_composite")),
+            # Risk
             "altman_z":       safe(row.get("altman_z")),
             "piotroski_f":    safe(row.get("piotroski_score")),
             "eq_score":       safe(row.get("earnings_quality_score")),
+            # Market data
             "price":          safe(row.get("currentPrice")),
             "market_cap":     safe(row.get("marketCap")),
             "avg_volume":     safe(row.get("averageVolume")),
@@ -888,7 +1188,7 @@ def export_json(df: pd.DataFrame):
             "tr_mom_12m":     pct(row.get("tr_momentum_12m")),
             "coverage":       pct(row.get("coverage")),
             "vs_sector":      safe(row.get("vs_sector")),
-            # Breakout
+            # Breakout scanner
             "breakout_score":  safe(row.get("breakout_score")),
             "breakout_rank":   safe(row.get("breakout_rank")),
             "breakout_phase":  safe(row.get("breakout_phase")),
@@ -901,6 +1201,7 @@ def export_json(df: pd.DataFrame):
             "breakout_reasons":str(row.get("breakout_reasons","") or ""),
         })
 
+    import json as _json
     payload = {
         "generated": datetime.now().strftime("%Y-%m-%d %H:%M UTC"),
         "count":     len(records),
@@ -908,16 +1209,15 @@ def export_json(df: pd.DataFrame):
     }
     json_path = "artifacts/sp500_data.json"
     with open(json_path, "w") as f:
-        import json
-        json.dump(payload, f, separators=(",", ":"))
+        _json.dump(payload, f, separators=(",", ":"))
+    # Also write to root for GitHub Pages
     with open("sp500_data.json", "w") as f:
-        json.dump(payload, f, separators=(",", ":"))
+        _json.dump(payload, f, separators=(",", ":"))
     print(f"✅  JSON → {json_path}  ({len(records)} stocks)")
 
 
-# ════════════════════════════════════════════════════════════
-#  RUN PIPELINE
-# ════════════════════════════════════════════════════════════
+
+
 def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
     global _SECTOR_THRESHOLDS
 
@@ -926,21 +1226,25 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print("=" * 65)
 
+    # 1. Cache check
     cached = load_cache() if use_cache else None
     if cached is not None:
         df = cached
         print("  Skipping fetch – using cached data")
     else:
+        # 2. Universe
         universe = get_sp500_tickers()
         tickers  = universe["ticker"].tolist()
 
+        # 3. Yahoo Finance (parallel)
         print(f"\n[1/6]  Yahoo Finance ({len(tickers)} tickers, parallel)...")
-        yf_data = fetch_yf_parallel(tickers)
+        yf_data = fetch_yf_parallel(tickers)   # always returns dict, never None
         fund_df = pd.DataFrame.from_dict(yf_data, orient="index")
         fund_df.index.name = "ticker"
         fund_df = fund_df.reset_index()
         df = universe.merge(fund_df, on="ticker", how="left")
 
+        # 4. TipRanks
         print("\n[2/6]  TipRanks...")
         tr_df = fetch_tipranks(tickers)
         if not tr_df.empty and "ticker" in tr_df.columns:
@@ -950,6 +1254,7 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
             for col in _TR_COLS:
                 df[col] = np.nan
 
+        # 5. Computed metrics
         print("\n[3/6]  Computing metrics...")
         df["piotroski_score"]        = df.apply(compute_piotroski,        axis=1)
         df["altman_z"]               = df.apply(compute_altman,           axis=1)
@@ -960,56 +1265,64 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
         df["tr_pt_upside"]           = df.apply(compute_tr_pt_upside,     axis=1)
         df["earnings_quality_score"] = df.apply(compute_earnings_quality, axis=1)
 
+        # Clip financial outliers (negative equity → crazy ROE, tiny mktcap → crazy FCF yield)
         df["returnOnEquity"] = df["returnOnEquity"].clip(-2.0, 5.0)
         df["fcf_yield"]      = df["fcf_yield"].clip(-0.50, 0.50)
         df["roic"]           = df["roic"].clip(-1.0, 3.0)
 
+        # 6. Price momentum
         print("\n[4/6]  Multi-timeframe momentum...")
         df = add_price_momentum(df, tickers)
 
+        # 7. Liquidity filter
         before = len(df)
         df = df[
             (df["marketCap"].fillna(0)     >= CFG["min_market_cap"]) &
             (df["averageVolume"].fillna(0) >= CFG["min_avg_volume"])
         ].copy()
-        print(f"\n  Liquidity filter: {before} → {len(df)}")
+        print(f"\n  Liquidity filter: {before} → {len(df)} "
+              f"(removed {before - len(df)})")
 
+        # 8. Coverage filter
         df["coverage"] = compute_coverage(df)
         before2 = len(df)
         df = df[df["coverage"] >= CFG["min_coverage"]].copy()
-        print(f"  Coverage filter:  {before2} → {len(df)}")
+        print(f"  Coverage filter:  {before2} → {len(df)} "
+              f"(removed {before2 - len(df)})")
 
+        # 9. Dynamic thresholds
         print("\n[5/6]  Dynamic sector thresholds...")
         _SECTOR_THRESHOLDS = build_sector_thresholds(df)
 
+        # 10. Pillar scores
         print("\n[6/6]  Pillar scores...")
         df = build_pillar_scores(df)
 
+        # 11. Composite + valuation
         df["composite_score"] = df.apply(compute_composite,       axis=1)
         df["valuation_score"] = df.apply(compute_valuation_score, axis=1)
 
+        # 12. Rank + sector context
         df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
         df["rank"] = df.index + 1
         df = add_sector_context(df)
 
         save_cache(df)
 
+    # 13. Output
     _print_summary(df)
     print("\n  Generating charts...")
     plot_all(df)
     print("\n  Exporting Excel...")
     style_and_export(df, CFG["output_file"])
-
     print("\n  Merging breakout scanner signals...")
     df = merge_breakout_signals(df)
-
     print("\n  Exporting JSON for web dashboard...")
     export_json(df)
 
     print("\n✅  DONE!")
     print(f"    Excel  → {CFG['output_file']}")
     print("    Charts → artifacts/*.png")
-    print("    JSON   → sp500_data.json (with breakout signals)")
     return df
 
 
