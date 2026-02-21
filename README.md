@@ -1,4 +1,4 @@
 
-# S&P 500 Advanced Ranking System v5.2
+# S&P 500 Advanced AI Ranking System v5.2
 
-@צMOZES
+@MOZES
