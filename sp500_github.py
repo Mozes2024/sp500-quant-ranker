@@ -1058,6 +1058,11 @@ def export_json(df: pd.DataFrame):
         except Exception:
             return str(v) if v else None
 
+    def pct(v):
+        """Fields stored as 0-1 fraction → multiply ×100 for display."""
+        r = safe(v)
+        return round(r * 100, 2) if r is not None else None
+
     records = []
     for _, row in df.iterrows():
         records.append({
@@ -1082,9 +1087,9 @@ def export_json(df: pd.DataFrame):
             # TipRanks
             "tr_smartscore":  safe(row.get("tr_smart_score")),
             "tr_consensus":   str(row.get("tr_analyst_consensus", "") or ""),
-            "tr_pt_upside":   safe(row.get("tr_pt_upside")),
-            "tr_news_bull":   safe(row.get("tr_news_bullish")),
-            "tr_blogger_bull":safe(row.get("tr_blogger_bullish")),
+            "tr_pt_upside":   pct(row.get("tr_pt_upside")),
+            "tr_news_bull":   pct(row.get("tr_news_bullish")),
+            "tr_blogger_bull":pct(row.get("tr_blogger_bullish")),
             "tr_insider":     str(row.get("tr_insider_trend", "") or ""),
             "tr_hedge":       str(row.get("tr_hedge_trend", "") or ""),
             # Valuation multiples
@@ -1094,30 +1099,30 @@ def export_json(df: pd.DataFrame):
             "ps":             safe(row.get("priceToSalesTrailing12Months")),
             "pb":             safe(row.get("priceToBook")),
             "ev_ebitda":      safe(row.get("enterpriseToEbitda")),
-            # Profitability
-            "roe":            safe(row.get("returnOnEquity")),
-            "roa":            safe(row.get("returnOnAssets")),
-            "roic":           safe(row.get("roic")),
-            "net_margin":     safe(row.get("profitMargins")),
-            "gross_margin":   safe(row.get("grossMargins")),
-            "op_margin":      safe(row.get("operatingMargins")),
-            # Growth
-            "rev_growth":     safe(row.get("revenueGrowth")),
-            "eps_growth":     safe(row.get("earningsGrowth")),
-            # FCF
-            "fcf_yield":      safe(row.get("fcf_yield")),
-            "fcf_margin":     safe(row.get("fcf_margin")),
+            # Profitability  (0-1 fraction → ×100)
+            "roe":            pct(row.get("returnOnEquity")),
+            "roa":            pct(row.get("returnOnAssets")),
+            "roic":           pct(row.get("roic")),
+            "net_margin":     pct(row.get("profitMargins")),
+            "gross_margin":   pct(row.get("grossMargins")),
+            "op_margin":      pct(row.get("operatingMargins")),
+            # Growth  (0-1 fraction → ×100)
+            "rev_growth":     pct(row.get("revenueGrowth")),
+            "eps_growth":     pct(row.get("earningsGrowth")),
+            # FCF  (0-1 fraction → ×100)
+            "fcf_yield":      pct(row.get("fcf_yield")),
+            "fcf_margin":     pct(row.get("fcf_margin")),
             # Other
             "current_ratio":  safe(row.get("currentRatio")),
             "debt_equity":    safe(row.get("debtToEquity")),
-            "div_yield":      safe(row.get("dividendYield")),
+            "div_yield":      pct(row.get("dividendYield")),
             "beta":           safe(row.get("beta")),
-            # Momentum
-            "perf_12m":       safe(row.get("perf_12m")),
-            "perf_6m":        safe(row.get("perf_6m")),
-            "perf_3m":        safe(row.get("perf_3m")),
-            "perf_1m":        safe(row.get("perf_1m")),
-            "momentum":       safe(row.get("momentum_composite")),
+            # Momentum  (0-1 fraction → ×100)
+            "perf_12m":       pct(row.get("perf_12m")),
+            "perf_6m":        pct(row.get("perf_6m")),
+            "perf_3m":        pct(row.get("perf_3m")),
+            "perf_1m":        pct(row.get("perf_1m")),
+            "momentum":       pct(row.get("momentum_composite")),
             # Risk
             "altman_z":       safe(row.get("altman_z")),
             "piotroski_f":    safe(row.get("piotroski_score")),
@@ -1126,9 +1131,9 @@ def export_json(df: pd.DataFrame):
             "price":          safe(row.get("currentPrice")),
             "market_cap":     safe(row.get("marketCap")),
             "avg_volume":     safe(row.get("averageVolume")),
-            "pt_upside":      safe(row.get("pt_upside")),
+            "pt_upside":      pct(row.get("pt_upside")),
             "analysts":       safe(row.get("numberOfAnalystOpinions")),
-            "coverage":       safe(row.get("coverage")),
+            "coverage":       pct(row.get("coverage")),
             "vs_sector":      safe(row.get("vs_sector")),
         })
 
