@@ -239,4 +239,4 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
 #  ENTRY POINT
 # ════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    run_pipeline(use_cache=True)
+    run_pipeline(use_cache=False)   # ← False חשוב!
