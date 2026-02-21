@@ -28,7 +28,7 @@ jobs:
           restore-keys: sp500-cache-v5-
 
       - name: Run ranking
-        run: python sp500_github.py
+        run: python sp500_github
 
       - name: Upload results (Excel + Charts)
         uses: actions/upload-artifact@v4
