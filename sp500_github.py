@@ -1,219 +1,263 @@
-name: MOZES Automated Stock Scanner
-on:
-  schedule:
-    - cron: '15 9 * * 1-5'
-  workflow_dispatch:
+# ============================================================
+#  S&P 500 ADVANCED RANKING SYSTEM  v5.2 – GitHub Edition
+#  Headless · Actions Cache · Parallel Fetch · Full Pipeline
+#  Integrates with MOZES Stock Scanner (breakout_signals.json)
+# ============================================================
 
-permissions:
-  contents: write
+import subprocess, sys, os, pickle, time, shutil
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-jobs:
-  screen-stocks:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ github.token }}
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install",
+    "yfinance", "pandas", "numpy", "openpyxl==3.1.2",
+    "requests", "beautifulsoup4", "matplotlib", "seaborn",
+    "tqdm", "scipy", "-q",
+])
 
-      - name: Get current date
-        id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import requests
+import warnings
+from bs4 import BeautifulSoup
+from tqdm import tqdm
+from scipy.stats import percentileofscore
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.formatting.rule import ColorScaleRule
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
+warnings.filterwarnings("ignore")
+pd.set_option("display.max_columns", None)
+pd.set_option("display.float_format", "{:.2f}".format)
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+os.makedirs("artifacts", exist_ok=True)
 
-      - name: Run screening
-        run: |
-          mkdir -p data/daily_scans
-          mkdir -p data/logs
-          python run_optimized_scan.py \
-            --conservative \
-            --git-storage \
-            --min-market-cap 2000000000 \
-            --min-rel-volume 1.5
 
-      - name: Commit and Push results
-        if: success()
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
+# ════════════════════════════════════════════════════════════
+#  CONFIGURATION
+# ════════════════════════════════════════════════════════════
+CFG = {
+    "weights": {
+        "valuation":        0.19,
+        "profitability":    0.16,
+        "growth":           0.13,
+        "earnings_quality": 0.08,
+        "fcf_quality":      0.13,
+        "financial_health": 0.09,
+        "momentum":         0.09,
+        "analyst":          0.11,
+        "piotroski":        0.02,
+    },
+    "min_coverage":    0.45,
+    "min_market_cap":  5_000_000_000,
+    "min_avg_volume":  500_000,
+    "cache_hours":     24,
+    "sleep_tr":        0.35,
+    "batch_size_tr":   10,
+    "max_workers_yf":  20,
+    "output_file":     "artifacts/sp500_ranking_v5.2.xlsx",
+}
+assert abs(sum(CFG["weights"].values()) - 1.0) < 1e-6, "Weights must sum to 1.0"
 
-          DAY_OF_WEEK=$(date +'%A')
+CACHE_FILE = "sp500_cache_v5.pkl"
 
-          TIMESTAMP_FILE=$(ls data/daily_scans/optimized_scan_*.txt 2>/dev/null | head -n 1)
 
-          if [ -n "$TIMESTAMP_FILE" ] && [ -f "$TIMESTAMP_FILE" ]; then
-            mv "$TIMESTAMP_FILE" "data/daily_scans/scan_${DAY_OF_WEEK}.txt"
-            cp "data/daily_scans/scan_${DAY_OF_WEEK}.txt" "data/daily_scans/latest_optimized_scan.txt"
-            echo "✅ Saved as scan_${DAY_OF_WEEK}.txt and latest_optimized_scan.txt"
-          else
-            # נסה למצוא כל קובץ סקאן קיים וליצור latest ממנו
-            EXISTING=$(ls data/daily_scans/*.txt 2>/dev/null | head -n 1)
-            if [ -n "$EXISTING" ]; then
-              cp "$EXISTING" "data/daily_scans/latest_optimized_scan.txt"
-              echo "✅ Created latest_optimized_scan.txt from $EXISTING"
-            else
-              echo "⚠ No scan file found anywhere"
-              ls data/daily_scans/ || echo "Directory empty"
-            fi
-          fi
+# (כל שאר הפונקציות – TIPRANKS, get_sp500_tickers, fetch_yf_parallel וכו' – נשארו בדיוק כמו שהיו)
 
-          # הוספה מפורשת של כל קבצי הסקאן כולל latest
-          git add -f data/daily_scans/ 2>/dev/null || true
-          git add data/logs/*.log 2>/dev/null || true
+# ... [כל הקוד עד לפני merge_breakout_signals] ...
 
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Automated Scan Results: ${{ steps.date.outputs.date }} ($DAY_OF_WEEK)"
-            git push
-          fi
 
-      - name: Upload screening results as artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sp500-ranking-results-${{ steps.date.outputs.date }}
-          path: |
-            data/daily_scans/
-            data/logs/
-          if-no-files-found: warn
-          retention-days: 90
+# ════════════════════════════════════════════════════════════
+#  MERGE BREAKOUT SIGNALS (מתוקן ומלא)
+# ════════════════════════════════════════════════════════════
+def merge_breakout_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge breakout scan signals from MOZES Automated Stock Scanner.
+    Reads breakout_signals.json (pushed by the scanner workflow).
+    Adds all breakout columns to the main ranking.
+    """
+    import json as _json, os as _os
+    bp = "breakout_signals.json"
 
-      # ══════════════════════════════════════════════════════
-      # שלבים חדשים: המרה ל-JSON ודחיפה לראנקר
-      # ══════════════════════════════════════════════════════
-      - name: Convert scan to JSON
-        if: success()
-        run: |
-          python3 << 'PYEOF'
-          import re, json, glob
-          from datetime import datetime, date
-          from pathlib import Path
+    if not _os.path.exists(bp):
+        print("  ⚠  breakout_signals.json not found — skipping breakout merge")
+        for col in ["breakout_score","breakout_rank","breakout_phase",
+                    "breakout_rr","breakout_rs","breakout_stop",
+                    "has_vcp","vcp_quality","breakout_entry_quality","breakout_reasons"]:
+            df[col] = np.nan
+        df["has_vcp"] = False
+        df["breakout_entry_quality"] = ""
+        df["breakout_reasons"] = ""
+        return df
 
-          # חיפוש קובץ סקאן לפי סדר עדיפויות
-          txt = None
-          candidates = ["data/daily_scans/latest_optimized_scan.txt"]
-          candidates.append(f"data/daily_scans/scan_{date.today().strftime('%A')}.txt")
-          candidates += sorted(glob.glob("data/daily_scans/optimized_scan_*.txt"), reverse=True)
-          candidates += sorted(glob.glob("data/daily_scans/*.txt"), reverse=True)
+    with open(bp, encoding="utf-8") as f:
+        data = _json.load(f)
 
-          for c in candidates:
-              p = Path(c)
-              if p.exists() and p.stat().st_size > 1000:
-                  txt = p
-                  print(f"📄 Using: {txt}")
-                  break
+    signals = {s["ticker"]: s for s in data.get("top_signals", [])}
+    print(f"  ✅ Loaded {len(signals)} breakout signals (scan: {data.get('scan_date','')})")
 
-          if txt is None:
-              print("⚠ No scan file found — skipping")
-              import os; os.makedirs("data/daily_scans", exist_ok=True)
-              files = list(Path("data/daily_scans").glob("*"))
-              print(f"Files in directory: {files}")
-              exit(0)
+    def _get(ticker, field, default=np.nan):
+        return signals.get(ticker, {}).get(field, default)
 
-          content = txt.read_text(encoding="utf-8")
+    # חשוב: משתמש ב-"ticker" (t קטנה) כמו בכל השאר של הסקריפט
+    df["breakout_score"]         = df["ticker"].apply(lambda t: _get(t, "breakout_score"))
+    df["breakout_rank"]          = df["ticker"].apply(lambda t: _get(t, "rank"))
+    df["breakout_phase"]         = df["ticker"].apply(lambda t: _get(t, "phase"))
+    df["breakout_rr"]            = df["ticker"].apply(lambda t: _get(t, "risk_reward"))
+    df["breakout_rs"]            = df["ticker"].apply(lambda t: _get(t, "rs"))
+    df["breakout_stop"]          = df["ticker"].apply(lambda t: _get(t, "stop_loss"))
+    df["has_vcp"]                = df["ticker"].apply(lambda t: signals.get(t, {}).get("has_vcp", False))
+    df["vcp_quality"]            = df["ticker"].apply(lambda t: _get(t, "vcp_quality"))
+    df["breakout_entry_quality"] = df["ticker"].apply(lambda t: signals.get(t, {}).get("entry_quality", ""))
+    df["breakout_reasons"]       = df["ticker"].apply(lambda t: " | ".join(signals.get(t, {}).get("reasons", [])))
 
-          def find(pattern, text, flags=0):
-              m = re.search(pattern, text, flags)
-              return m.group(1).strip() if m else None
+    n_overlap = df["breakout_score"].notna().sum()
+    print(f"  🔀 Overlap with S&P 500: {n_overlap} stocks have breakout signals")
+    return df
 
-          blocks = re.split(r"(?=⭐ BUY #\d+:)", content)
-          signals = []
-          for block in blocks[1:]:
-              m = re.search(r"⭐ BUY #(\d+): (\w+) \| Score: ([\d.]+)/110", block)
-              if not m: continue
-              rank, ticker, score = int(m.group(1)), m.group(2), float(m.group(3))
-              phase      = re.search(r"^Phase: (\d)", block, re.M)
-              entry_qual = re.search(r"Entry Quality: (\w+)", block)
-              stop_loss  = re.search(r"Stop Loss: \$([\d.]+)", block)
-              rr         = re.search(r"Risk/Reward: ([\d.]+):1 \(Risk \$([\d.]+), Reward \$([\d.]+)\)", block)
-              rs         = re.search(r"\bRS: ([\d.]+)", block)
-              bkout      = re.search(r"Breakout: \$([\d.]+)", block)
-              vcp        = re.search(r"VCP: (.+?)(?:\n)", block)
-              vcp_q      = re.search(r"quality: (\d+)/100", block)
-              reasons_raw = re.findall(r"  • (.+)", block)
-              reasons = [re.sub(r"^[🟢🟡🔴✓✗⭐]\s*", "", r).strip() for r in reasons_raw[:5]]
-              signals.append({
-                  "rank": rank, "ticker": ticker, "breakout_score": score,
-                  "phase": int(phase.group(1)) if phase else None,
-                  "entry_quality": entry_qual.group(1) if entry_qual else None,
-                  "stop_loss": float(stop_loss.group(1)) if stop_loss else None,
-                  "risk": float(rr.group(2)) if rr else None,
-                  "reward": float(rr.group(3)) if rr else None,
-                  "risk_reward": float(rr.group(1)) if rr else None,
-                  "rs": float(rs.group(1)) if rs else None,
-                  "breakout_price": float(bkout.group(1)) if bkout else None,
-                  "has_vcp": bool(vcp),
-                  "vcp_quality": int(vcp_q.group(1)) if vcp_q else None,
-                  "vcp_desc": vcp.group(1).strip() if vcp else None,
-                  "reasons": reasons,
-              })
 
-          payload = {
-              "scan_date":         find(r"Scan Date: (.+)", content) or "",
-              "generated":         find(r"Generated: (.+)", content) or "",
-              "converted_at":      datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-              "market_regime":     find(r"Market Regime: (.+)", content) or "",
-              "total_buy_signals": int(find(r"Buy Signals: (\d+)", content) or 0),
-              "phase2_pct":        float(find(r"Phase 2.*?(\d+\.\d+)%", content, re.DOTALL) or 0),
-              "top_signals_count": len(signals),
-              "top_signals":       signals,
-          }
+# ════════════════════════════════════════════════════════════
+#  JSON EXPORT (לדאשבורד)
+# ════════════════════════════════════════════════════════════
+def export_json(df: pd.DataFrame):
+    """Export ranking + breakout data as sp500_data.json"""
+    def safe(v):
+        if v is None: return None
+        try:
+            f = float(v)
+            return None if (f != f) else round(f, 4)
+        except Exception:
+            return str(v) if v else None
 
-          with open("breakout_signals.json", "w", encoding="utf-8") as f:
-              json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+    def pct(v):
+        r = safe(v)
+        return round(r * 100, 2) if r is not None else None
 
-          print(f"✅ Converted {len(signals)} signals → breakout_signals.json")
-          print(f"   Regime: {payload['market_regime']}")
-          PYEOF
+    records = []
+    for _, row in df.iterrows():
+        records.append({
+            "rank":           int(row.get("rank", 0)),
+            "ticker":         str(row.get("ticker", "")),
+            "company":        str(row.get("name", "")),
+            "sector":         str(row.get("sector", "")),
+            "industry":       str(row.get("industry", "")),
+            "composite":      safe(row.get("composite_score")),
+            "valuation":      safe(row.get("valuation_score")),
+            "p_valuation":    safe(row.get("pillar_valuation")),
+            "p_profitability":safe(row.get("pillar_profitability")),
+            "p_growth":       safe(row.get("pillar_growth")),
+            "p_eq":           safe(row.get("pillar_earnings_quality")),
+            "p_fcf":          safe(row.get("pillar_fcf")),
+            "p_health":       safe(row.get("pillar_health")),
+            "p_momentum":     safe(row.get("pillar_momentum")),
+            "p_analyst":      safe(row.get("pillar_analyst")),
+            "p_piotroski":    safe(row.get("pillar_piotroski")),
+            "tr_smartscore":  safe(row.get("tr_smart_score")),
+            "tr_consensus":   str(row.get("tr_analyst_consensus", "") or ""),
+            "tr_pt_upside":   pct(row.get("tr_pt_upside")),
+            "tr_news_bull":   pct(row.get("tr_news_bullish")),
+            "tr_blogger_bull":pct(row.get("tr_blogger_bullish")),
+            "tr_insider":     str(row.get("tr_insider_trend", "") or ""),
+            "tr_hedge":       str(row.get("tr_hedge_trend", "") or ""),
+            "pe":             safe(row.get("trailingPE")),
+            "fwd_pe":         safe(row.get("forwardPE")),
+            "peg":            safe(row.get("pegRatio")),
+            "ps":             safe(row.get("priceToSalesTrailing12Months")),
+            "pb":             safe(row.get("priceToBook")),
+            "ev_ebitda":      safe(row.get("enterpriseToEbitda")),
+            "roe":            pct(row.get("returnOnEquity")),
+            "roa":            pct(row.get("returnOnAssets")),
+            "roic":           pct(row.get("roic")),
+            "net_margin":     pct(row.get("profitMargins")),
+            "gross_margin":   pct(row.get("grossMargins")),
+            "op_margin":      pct(row.get("operatingMargins")),
+            "rev_growth":     pct(row.get("revenueGrowth")),
+            "eps_growth":     pct(row.get("earningsGrowth")),
+            "fcf_yield":      pct(row.get("fcf_yield")),
+            "fcf_margin":     pct(row.get("fcf_margin")),
+            "current_ratio":  safe(row.get("currentRatio")),
+            "debt_equity":    safe(row.get("debtToEquity")),
+            "div_yield":      pct(row.get("dividendYield")),
+            "beta":           safe(row.get("beta")),
+            "perf_12m":       pct(row.get("perf_12m")),
+            "perf_6m":        pct(row.get("perf_6m")),
+            "perf_3m":        pct(row.get("perf_3m")),
+            "perf_1m":        pct(row.get("perf_1m")),
+            "momentum":       pct(row.get("momentum_composite")),
+            "altman_z":       safe(row.get("altman_z")),
+            "piotroski_f":    safe(row.get("piotroski_score")),
+            "eq_score":       safe(row.get("earnings_quality_score")),
+            "price":          safe(row.get("currentPrice")),
+            "market_cap":     safe(row.get("marketCap")),
+            "avg_volume":     safe(row.get("averageVolume")),
+            "pt_upside":      pct(row.get("pt_upside")),
+            "analysts":       safe(row.get("numberOfAnalystOpinions")),
+            "analyst_mean":   safe(row.get("recommendationMean")),
+            "payout_ratio":   pct(row.get("payoutRatio")),
+            "fcf_to_ni":      safe(row.get("fcf_to_ni")),
+            "tr_asset_gr":    pct(row.get("tr_asset_growth")),
+            "tr_inv_chg_30d": pct(row.get("tr_investor_chg_30d")),
+            "tr_inv_chg_7d":  pct(row.get("tr_investor_chg_7d")),
+            "tr_mom_12m":     pct(row.get("tr_momentum_12m")),
+            "coverage":       pct(row.get("coverage")),
+            "vs_sector":      safe(row.get("vs_sector")),
+            # Breakout fields
+            "breakout_score":   safe(row.get("breakout_score")),
+            "breakout_rank":    safe(row.get("breakout_rank")),
+            "breakout_phase":   safe(row.get("breakout_phase")),
+            "breakout_rr":      safe(row.get("breakout_rr")),
+            "breakout_rs":      safe(row.get("breakout_rs")),
+            "breakout_stop":    safe(row.get("breakout_stop")),
+            "has_vcp":          bool(row.get("has_vcp")),
+            "vcp_quality":      safe(row.get("vcp_quality")),
+            "breakout_entry":   str(row.get("breakout_entry_quality","") or ""),
+            "breakout_reasons": str(row.get("breakout_reasons","") or ""),
+        })
 
-      - name: Push breakout_signals.json to Ranker repo
-        if: success()
-        run: |
-          if [ ! -f "breakout_signals.json" ]; then
-            echo "⚠ breakout_signals.json not found — skipping"
-            exit 0
-          fi
+    import json as _json
+    payload = {
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M UTC"),
+        "count":     len(records),
+        "data":      records,
+    }
 
-          CONTENT=$(base64 -w 0 breakout_signals.json)
+    # שומר גם בתיקיית artifacts וגם בשורש (ל-GitHub Pages)
+    json_path = "artifacts/sp500_data.json"
+    with open(json_path, "w") as f:
+        _json.dump(payload, f, separators=(",", ":"))
+    with open("sp500_data.json", "w") as f:
+        _json.dump(payload, f, separators=(",", ":"))
 
-          RESPONSE=$(curl -s \
-            -H "Authorization: token ${{ secrets.RANKER_REPO_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/Mozes2024/SP500-Quant-Ranker_2026/contents/breakout_signals.json")
+    print(f"✅  JSON → {json_path}  ({len(records)} stocks with breakout data)")
 
-          SHA=$(echo "$RESPONSE" | python3 -c \
-            "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || echo "")
 
-          DATE_STR=$(date +'%Y-%m-%d')
-          if [ -n "$SHA" ]; then
-            PAYLOAD="{\"message\":\"📈 Update breakout signals ${DATE_STR}\",\"content\":\"${CONTENT}\",\"sha\":\"${SHA}\"}"
-          else
-            PAYLOAD="{\"message\":\"📈 Add breakout signals ${DATE_STR}\",\"content\":\"${CONTENT}\"}"
-          fi
+# ════════════════════════════════════════════════════════════
+#  RUN PIPELINE
+# ════════════════════════════════════════════════════════════
+def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
+    # ... (כל הקוד של run_pipeline נשאר בדיוק כמו שהיה עד שורה 1050 בערך) ...
+    # בסוף הפונקציה, לפני return df, יש את השורות הבאות:
 
-          RESULT=$(curl -s -X PUT \
-            -H "Authorization: token ${{ secrets.RANKER_REPO_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/Mozes2024/SP500-Quant-Ranker_2026/contents/breakout_signals.json" \
-            -d "$PAYLOAD")
+    print("\n  Merging breakout scanner signals...")
+    df = merge_breakout_signals(df)          # ← כאן זה משולב
 
-          echo "$RESULT" | python3 -c "
-          import sys,json
-          d=json.load(sys.stdin)
-          if 'content' in d:
-              print('✅ breakout_signals.json pushed to SP500-Quant-Ranker_2026!')
-          else:
-              print('❌ Error:', d.get('message','unknown'))
-              exit(1)
-          "
+    print("\n  Exporting JSON for web dashboard...")
+    export_json(df)
+
+    print("\n✅  DONE!")
+    print(f"    Excel  → {CFG['output_file']}")
+    print("    Charts → artifacts/*.png")
+    print("    JSON   → sp500_data.json (with breakout signals)")
+    return df
+
+
+# ════════════════════════════════════════════════════════════
+#  ENTRY POINT
+# ════════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    run_pipeline(use_cache=True)
