@@ -13,7 +13,7 @@
   --mono:'Space Mono',monospace; --sans:'Syne',sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;font-size:14px;}
 body.rtl{direction:rtl;}
 
 /* HEADER */
@@ -111,16 +111,16 @@ header{
 .view-tabs::-webkit-scrollbar{height:3px;}
 .view-tabs::-webkit-scrollbar-thumb{background:var(--border);}
 .view-tab{
-  padding:9px 14px;font-family:var(--mono);font-size:9px;letter-spacing:.8px;text-transform:uppercase;
-  color:var(--text3);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;
-  transition:all .15s;background:transparent;border-top:none;border-left:none;border-right:none;
+  padding:10px 16px;font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.3px;
+  color:#8aa8c8;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent;
+  transition:all .2s;background:transparent;border-top:none;border-left:none;border-right:none;
 }
-.view-tab:hover{color:var(--text);}
-.view-tab.active{color:var(--gold);border-bottom-color:var(--gold);}
+.view-tab:hover{color:#fff;background:rgba(240,165,0,.06);}
+.view-tab.active{color:var(--gold);border-bottom-color:var(--gold);background:rgba(240,165,0,.08);font-weight:700;}
 
 /* TABLE — fixed layout to prevent shift */
 .table-wrap{overflow-x:auto;padding:0 28px 60px;}
-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px;table-layout:fixed;}
+table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;table-layout:fixed;}
 .col-rank{width:40px;}
 .col-ticker{width:72px;}
 .col-company{width:170px;}
@@ -128,8 +128,8 @@ table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px;table-l
 .col-data{width:100px;}
 
 thead th{
-  padding:9px 7px;text-align:left;font-family:var(--mono);font-size:9px;
-  letter-spacing:1px;text-transform:uppercase;color:var(--text3);
+  padding:9px 7px;text-align:center;font-family:var(--mono);font-size:9px;
+  letter-spacing:.5px;text-transform:uppercase;color:var(--text3);font-size:10px;
   border-bottom:1px solid var(--border);white-space:nowrap;
   cursor:pointer;user-select:none;transition:color .15s;overflow:hidden;
   position:relative;
@@ -158,14 +158,14 @@ thead th:hover .th-tip{visibility:visible;opacity:1;}
 tbody tr{border-bottom:1px solid #0a1520;transition:background .1s;cursor:pointer;}
 tbody tr:hover{background:var(--surface2);}
 tbody tr.expanded{background:var(--surface2);}
-td{padding:9px 7px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+td{padding:10px 7px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
-.td-rank{font-family:var(--mono);font-size:10px;color:var(--text3);}
+.td-rank{font-family:var(--mono);font-size:12px;color:var(--text3);text-align:center;}
 .td-rank.top3{color:var(--gold2);font-weight:700;}
-.td-ticker{font-family:var(--mono);font-size:13px;font-weight:700;color:#fff;}
+.td-ticker{font-family:var(--mono);font-size:14px;font-weight:700;color:#fff;}
 .td-ticker a{color:inherit;text-decoration:none;border-bottom:1px solid transparent;transition:border-color .15s;}
 .td-ticker a:hover{border-color:var(--gold);color:var(--gold);}
-.td-company{color:var(--text2);font-size:11px;}
+.td-company{color:var(--text2);font-size:12px;}
 .sector-pill{display:inline-block;padding:2px 7px;border-radius:3px;font-size:9px;font-family:var(--mono);white-space:nowrap;}
 
 .score-cell{display:flex;align-items:center;gap:6px;}
@@ -173,7 +173,7 @@ td{padding:9px 7px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;
 .score-bar-bg{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
 .score-bar-fill{height:100%;border-radius:2px;}
 
-.td-num{font-family:var(--mono);font-size:11px;text-align:right;padding-right:10px;}
+.td-num{font-family:var(--mono);font-size:12px;text-align:center;padding:0 4px;}
 .td-num.pos{color:var(--teal);}
 .td-num.neg{color:var(--red);}
 .td-num.neutral{color:var(--text2);}
@@ -299,6 +299,12 @@ td{padding:9px 7px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;
 // ═══ I18N ════════════════════════════════════════════════════
 const T = {
   en: {
+    detailLabels:{
+      Price:'Price', MktCap:'Mkt Cap', AltmanZ:'Altman Z',
+      PiotroskiF:'Piotroski F', DivYield:'Div Yield', vsSector:'vs Sector',
+      Beta:'Beta', Analysts:'# Analysts', SmartScore:'TR SmartScore',
+      Consensus:'TR Consensus', TRUpside:'TR PT Upside', Coverage:'Coverage',
+    },
     ranked:'Stocks Ranked', avg:'Avg Composite', topsec:'Top Sector',
     ss8:'SmartScore ≥ 8', tr:'TR Coverage', stocks:'stocks',
     searchph:'Search ticker or company…',
@@ -391,6 +397,25 @@ const T = {
     }
   },
   he: {
+    sectors:{
+      'Information Technology':'טכנולוגיה',
+      'Health Care':'בריאות',
+      'Financials':'פיננסים',
+      'Consumer Discretionary':'צריכה מחזורית',
+      'Communication Services':'תקשורת',
+      'Industrials':'תעשייה',
+      'Consumer Staples':'צריכה בסיסית',
+      'Energy':'אנרגיה',
+      'Real Estate':'נדל"ן',
+      'Materials':'חומרים',
+      'Utilities':'תשתיות',
+    },
+    detailLabels:{
+      Price:'מחיר', MktCap:'שווי שוק', AltmanZ:'Altman Z',
+      PiotroskiF:'Piotroski F', DivYield:'תשואת דיב.', vsSector:'מול סקטור',
+      Beta:'בטא', Analysts:'אנליסטים', SmartScore:'SmartScore',
+      Consensus:'קונצנזוס', TRUpside:'יעד TR', Coverage:'כיסוי',
+    },
     ranked:'מניות מדורגות', avg:'ציון ממוצע', topsec:'סקטור מוביל',
     ss8:'SmartScore ≥ 8', tr:'כיסוי TipRanks', stocks:'מניות',
     searchph:'חפש טיקר או חברה…',
@@ -766,8 +791,10 @@ function buildSectorBtns(){
   sectors.forEach(s=>{
     const btn=document.createElement('button');
     btn.className='sector-btn'+(s==='ALL'?' active':'');
+    const secTrans=(T[lang]||T.en).sectors||{};
     const label=s==='ALL'?t('allsectors'):
-      s.replace('Information Technology','IT').replace('Communication Services','COMM').replace('Consumer Discretionary','CONS D').replace('Consumer Staples','CONS S').replace('Health Care','HEALTH').toUpperCase();
+      (lang==='he'?(secTrans[s]||s):
+      s.replace('Information Technology','IT').replace('Communication Services','COMM').replace('Consumer Discretionary','CONS D').replace('Consumer Staples','CONS S').replace('Health Care','HEALTH').toUpperCase());
     btn.textContent=label;
     btn.addEventListener('click',()=>{
       document.querySelectorAll('.sector-btn').forEach(b=>b.classList.remove('active'));
@@ -933,11 +960,17 @@ function renderTable(){
 }
 
 function buildDetail(d){
+  const isHe=lang==='he';
   const pillars=[
-    ['VALUATION',d.p_valuation],['PROFITAB.',d.p_profitability],
-    ['GROWTH',d.p_growth],['EQ QUAL',d.p_eq],['FCF',d.p_fcf],
-    ['HEALTH',d.p_health],['MOMENTUM',d.p_momentum],
-    ['ANALYST',d.p_analyst],['PIOTROSKI',d.p_piotroski],
+    [isHe?'שווי':'VALUATION',d.p_valuation],
+    [isHe?'רווחיות':'PROFITAB.',d.p_profitability],
+    [isHe?'צמיחה':'GROWTH',d.p_growth],
+    [isHe?'איכות רווח':'EQ QUAL',d.p_eq],
+    [isHe?'FCF':'FCF',d.p_fcf],
+    [isHe?'בריאות':'HEALTH',d.p_health],
+    [isHe?'מומנטום':'MOMENTUM',d.p_momentum],
+    [isHe?'אנליסטים':'ANALYST',d.p_analyst],
+    [isHe?'Piotroski':'PIOTROSKI',d.p_piotroski],
   ];
   const pg=pillars.map(([nm,v])=>`
     <div><div class="pillar-name">${nm}</div>
@@ -945,19 +978,20 @@ function buildDetail(d){
     <div class="pillar-bar-bg"><div class="pillar-bar-fill" style="width:${v||0}%;background:${pillarColor(v)}"></div></div>
     </div>`).join('');
 
+  const DL=(T[lang]||T.en).detailLabels||T.en.detailLabels;
   const extras=[
-    ['Price', d.price?'$'+d.price.toFixed(2):'—',''],
-    ['Mkt Cap', d.market_cap?'$'+(d.market_cap/1e9).toFixed(1)+'B':'—',''],
-    ['Altman Z', valid(d.altman_z)?d.altman_z.toFixed(2):'—', altmanCls(d.altman_z)],
-    ['Piotroski F', valid(d.piotroski_f)?d.piotroski_f:'—',''],
-    ['Div Yield', valid(d.div_yield)?d.div_yield.toFixed(2)+'%':'—',''],
-    ['vs Sector', valid(d.vs_sector)?(d.vs_sector>0?'+':'')+d.vs_sector.toFixed(1):'—', signCls(d.vs_sector)],
-    ['Beta', valid(d.beta)?d.beta.toFixed(2):'—',''],
-    ['# Analysts', d.analysts||'—',''],
-    ['TR SmartScore', d.tr_smartscore||'—',''],
-    ['TR Consensus', (d.tr_consensus||'—').replace('Moderate','Mod '),''],
-    ['TR PT Upside', valid(d.tr_pt_upside)?d.tr_pt_upside.toFixed(1)+'%':'—', signCls(d.tr_pt_upside)],
-    ['Coverage', valid(d.coverage)?d.coverage.toFixed(0)+'%':'—',''],
+    [DL.Price, d.price?'$'+d.price.toFixed(2):'—',''],
+    [DL.MktCap, d.market_cap?'$'+(d.market_cap/1e9).toFixed(1)+'B':'—',''],
+    [DL.AltmanZ, valid(d.altman_z)?d.altman_z.toFixed(2):'—', altmanCls(d.altman_z)],
+    [DL.PiotroskiF, valid(d.piotroski_f)?d.piotroski_f:'—',''],
+    [DL.DivYield, valid(d.div_yield)?d.div_yield.toFixed(2)+'%':'—',''],
+    [DL.vsSector, valid(d.vs_sector)?(d.vs_sector>0?'+':'')+d.vs_sector.toFixed(1):'—', signCls(d.vs_sector)],
+    [DL.Beta, valid(d.beta)?d.beta.toFixed(2):'—',''],
+    [DL.Analysts, d.analysts||'—',''],
+    [DL.SmartScore, d.tr_smartscore||'—',''],
+    [DL.Consensus, (d.tr_consensus||'—').replace('Moderate','Mod '),''],
+    [DL.TRUpside, valid(d.tr_pt_upside)?d.tr_pt_upside.toFixed(1)+'%':'—', signCls(d.tr_pt_upside)],
+    [DL.Coverage, valid(d.coverage)?d.coverage.toFixed(0)+'%':'—',''],
   ];
   const eg=extras.map(([l,v,c])=>`
     <div class="detail-item">
