@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S&P 500 Quant Ranker v5.2</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:        #080d14;
+  --surface:   #0e1623;
+  --surface2:  #131f30;
+  --border:    #1e2e42;
+  --gold:      #f0a500;
+  --gold2:     #ffc84a;
+  --teal:      #00c9a7;
+  --red:       #ff4d6d;
+  --text:      #c8d8e8;
+  --text2:     #6b8aaa;
+  --text3:     #3a5570;
+  --mono:      'Space Mono', monospace;
+  --sans:      'Syne', sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── HEADER ── */
+header {
+  padding: 28px 40px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(180deg, #0a1220 0%, var(--bg) 100%);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(8px);
+}
+.logo {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.logo-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.5px;
+}
+.logo-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--gold);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.header-meta {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+.last-updated {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+}
+.live-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 8px var(--teal);
+  display: inline-block;
+  margin-right: 6px;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50% { opacity:.5; transform:scale(1.3); }
+}
+
+/* ── STATS BAR ── */
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+.stat-item {
+  padding: 16px 28px;
+  border-right: 1px solid var(--border);
+  transition: background .2s;
+}
+.stat-item:last-child { border-right: none; }
+.stat-item:hover { background: var(--surface); }
+.stat-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.stat-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1;
+}
+.stat-accent { color: var(--gold); }
+
+/* ── CONTROLS ── */
+.controls {
+  padding: 20px 40px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.search-wrap {
+  position: relative;
+  flex: 0 0 280px;
+}
+.search-icon {
+  position: absolute;
+  left: 12px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--text3);
+  font-size: 14px;
+}
+#search {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 12px 9px 36px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  transition: border-color .2s;
+}
+#search::placeholder { color: var(--text3); }
+#search:focus { border-color: var(--gold); }
+
+.sector-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+.sector-btn {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .5px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.sector-btn:hover { border-color: var(--gold); color: var(--gold); }
+.sector-btn.active { background: var(--gold); border-color: var(--gold); color: #000; font-weight: 700; }
+
+.sort-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.sort-label { font-family: var(--mono); font-size: 10px; color: var(--text3); letter-spacing:1px; }
+#sortSelect {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  outline: none;
+  cursor: pointer;
+}
+
+.count-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  white-space: nowrap;
+  margin-left: auto;
+}
+.count-badge span { color: var(--gold); font-weight: 700; }
+
+/* ── TABLE ── */
+.table-wrap {
+  overflow-x: auto;
+  padding: 0 40px 40px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 16px;
+  font-size: 13px;
+}
+thead th {
+  padding: 12px 10px;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: color .15s;
+}
+thead th:hover { color: var(--gold); }
+thead th.sorted { color: var(--gold); }
+thead th.sorted::after { content: ' ↓'; }
+thead th.sorted.asc::after { content: ' ↑'; }
+
+tbody tr {
+  border-bottom: 1px solid #0e1a26;
+  transition: background .1s;
+  cursor: pointer;
+}
+tbody tr:hover { background: var(--surface2); }
+tbody tr.expanded { background: var(--surface2); }
+
+td {
+  padding: 11px 10px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* rank */
+.td-rank {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text3);
+  width: 40px;
+}
+.td-rank.top3 { color: var(--gold2); font-weight: 700; }
+
+/* ticker */
+.td-ticker {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  min-width: 70px;
+}
+.td-ticker a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color .15s;
+}
+.td-ticker a:hover { border-color: var(--gold); color: var(--gold); }
+
+/* company */
+.td-company {
+  color: var(--text2);
+  font-size: 12px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* sector pill */
+.sector-pill {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: var(--mono);
+  letter-spacing: .3px;
+  white-space: nowrap;
+}
+
+/* composite score bar */
+.score-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 110px;
+}
+.score-num {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  width: 38px;
+  text-align: right;
+}
+.score-bar-bg {
+  flex: 1;
+  height: 5px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 50px;
+}
+.score-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width .3s ease;
+}
+
+/* numeric cells */
+.td-num {
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: right;
+  padding-right: 14px;
+}
+.td-num.pos { color: var(--teal); }
+.td-num.neg { color: var(--red); }
+.td-num.neutral { color: var(--text2); }
+
+/* smartscore badge */
+.ss-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* pillar mini bars */
+.pillar-row {
+  display: none;
+  background: #060c15;
+  border-bottom: 1px solid var(--border);
+}
+.pillar-row.open { display: table-row; }
+.pillar-inner {
+  padding: 16px 60px 20px;
+}
+.pillar-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 12px;
+  margin-top: 8px;
+}
+.pillar-item {}
+.pillar-name {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.pillar-score {
+  font-size: 20px;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+.pillar-bar-bg {
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.pillar-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+}
+.pillar-extra {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+.pillar-extra-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.pillar-extra-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.pillar-extra-value {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* loading */
+#loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 60vh;
+  gap: 20px;
+}
+.spinner {
+  width: 48px; height: 48px;
+  border: 3px solid var(--border);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-text {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text2);
+  letter-spacing: 2px;
+  animation: blink 1.5s infinite;
+}
+@keyframes blink { 0%,100%{opacity:1;} 50%{opacity:.3;} }
+
+#error-msg {
+  display: none;
+  text-align: center;
+  padding: 60px;
+  font-family: var(--mono);
+  color: var(--red);
+}
+
+/* scrollbar */
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:var(--bg); }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:var(--text3); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div>
+      <div class="logo-title">S&amp;P 500 Quant Ranker</div>
+      <div class="logo-sub">v5.2 · Senior Quant Pro · 9-Pillar Model</div>
+    </div>
+  </div>
+  <div class="header-meta">
+    <div class="last-updated" id="lastUpdated">
+      <span class="live-dot"></span>Loading...
+    </div>
+  </div>
+</header>
+
+<div class="stats-bar" id="statsBar" style="display:none">
+  <div class="stat-item">
+    <div class="stat-label">Stocks Ranked</div>
+    <div class="stat-value" id="statTotal">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Avg Composite</div>
+    <div class="stat-value stat-accent" id="statAvg">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Top Sector</div>
+    <div class="stat-value" id="statTopSector" style="font-size:16px;margin-top:4px">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">SmartScore ≥ 8</div>
+    <div class="stat-value stat-accent" id="statSS8">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">TR Coverage</div>
+    <div class="stat-value" id="statTR">—</div>
+  </div>
+</div>
+
+<div class="controls" id="controls" style="display:none">
+  <div class="search-wrap">
+    <span class="search-icon">⌕</span>
+    <input type="text" id="search" placeholder="Search ticker or company…">
+  </div>
+  <div class="sector-filters" id="sectorFilters"></div>
+  <div class="sort-wrap">
+    <span class="sort-label">SORT</span>
+    <select id="sortSelect">
+      <option value="rank_asc">Rank ↑</option>
+      <option value="composite_desc">Composite ↓</option>
+      <option value="valuation_desc">Valuation ↓</option>
+      <option value="smartscore_desc">SmartScore ↓</option>
+      <option value="momentum_desc">Momentum ↓</option>
+      <option value="perf12_desc">12M Perf ↓</option>
+    </select>
+  </div>
+  <div class="count-badge">Showing <span id="showCount">—</span> stocks</div>
+</div>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div class="loading-text">LOADING MARKET DATA...</div>
+</div>
+
+<div id="error-msg">
+  ⚠ Could not load sp500_data.json<br>
+  <span style="color:var(--text2);font-size:11px;margin-top:8px;display:block">
+    Make sure the GitHub Actions workflow has run at least once.
+  </span>
+</div>
+
+<div class="table-wrap" id="tableWrap" style="display:none">
+  <table id="mainTable">
+    <thead>
+      <tr>
+        <th data-col="rank">#</th>
+        <th data-col="ticker">Ticker</th>
+        <th data-col="company">Company</th>
+        <th data-col="sector">Sector</th>
+        <th data-col="composite" style="min-width:140px">Composite Score</th>
+        <th data-col="valuation">Valuation</th>
+        <th data-col="smartscore">SmartScore</th>
+        <th data-col="consensus">Consensus</th>
+        <th data-col="pe">P/E</th>
+        <th data-col="fwdpe">Fwd P/E</th>
+        <th data-col="evebitda">EV/EBITDA</th>
+        <th data-col="roe">ROE %</th>
+        <th data-col="margin">Net Mgn %</th>
+        <th data-col="revgrowth">Rev Grw %</th>
+        <th data-col="fcfyield">FCF Yld %</th>
+        <th data-col="perf12">12M %</th>
+        <th data-col="perf3">3M %</th>
+        <th data-col="beta">Beta</th>
+        <th data-col="coverage">Cov %</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+</div>
+
+<script>
+// ── SECTOR COLORS ──
+const SECTOR_COLORS = {
+  'Information Technology': { bg:'#0d2137', color:'#4fc3f7' },
+  'Health Care':            { bg:'#0d2118', color:'#69f0ae' },
+  'Financials':             { bg:'#1a1a0d', color:'#fff176' },
+  'Consumer Discretionary': { bg:'#1a100d', color:'#ffab91' },
+  'Communication Services': { bg:'#150d1a', color:'#ce93d8' },
+  'Industrials':            { bg:'#0d1a1a', color:'#80deea' },
+  'Consumer Staples':       { bg:'#1a160d', color:'#ffcc80' },
+  'Energy':                 { bg:'#1a0d0d', color:'#ef9a9a' },
+  'Real Estate':            { bg:'#0d1a13', color:'#a5d6a7' },
+  'Materials':              { bg:'#0d1318', color:'#90caf9' },
+  'Utilities':              { bg:'#120d1a', color:'#b39ddb' },
+};
+
+function scoreColor(v) {
+  if (!v && v !== 0) return '#3a5570';
+  if (v >= 70) return '#00c9a7';
+  if (v >= 55) return '#f0a500';
+  if (v >= 40) return '#ff9800';
+  return '#ff4d6d';
+}
+
+function pillarColor(v) {
+  if (!v && v !== 0) return '#3a5570';
+  if (v >= 70) return '#00c9a7';
+  if (v >= 50) return '#f0a500';
+  return '#ff4d6d';
+}
+
+function ssColor(v) {
+  if (!v) return { bg:'#1e2e42', color:'#6b8aaa' };
+  if (v >= 8) return { bg:'#0d3320', color:'#00e676' };
+  if (v >= 6) return { bg:'#1a2e0d', color:'#76ff03' };
+  if (v >= 4) return { bg:'#2e2400', color:'#ffd600' };
+  return { bg:'#2e0d0d', color:'#ff5252' };
+}
+
+function fmtNum(v, decimals=1, suffix='') {
+  if (v === null || v === undefined || isNaN(v)) return '<span style="color:#3a5570">—</span>';
+  return (parseFloat(v).toFixed(decimals)) + suffix;
+}
+
+function numClass(v) {
+  if (v === null || v === undefined || isNaN(v)) return 'neutral';
+  return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neutral';
+}
+
+let allData = [];
+let filteredData = [];
+let currentSector = 'ALL';
+let currentSearch = '';
+let currentSort = 'rank_asc';
+let expandedTicker = null;
+
+// ── LOAD DATA ──
+async function loadData() {
+  try {
+    const r = await fetch('sp500_data.json');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    allData = json.data;
+    document.getElementById('lastUpdated').innerHTML =
+      `<span class="live-dot"></span>Updated: ${json.generated || 'unknown'}`;
+    initDashboard();
+  } catch(e) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error-msg').style.display = 'block';
+    console.error(e);
+  }
+}
+
+function initDashboard() {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('statsBar').style.display = 'grid';
+  document.getElementById('controls').style.display = 'flex';
+  document.getElementById('tableWrap').style.display = 'block';
+
+  // Stats
+  const total = allData.length;
+  const avgComp = (allData.reduce((a,b) => a + (b.composite||0), 0) / total).toFixed(1);
+  const ss8 = allData.filter(d => d.tr_smartscore >= 8).length;
+  const trCov = allData.filter(d => d.tr_smartscore).length;
+
+  // Top sector
+  const secMap = {};
+  allData.forEach(d => {
+    if(!secMap[d.sector]) secMap[d.sector] = [];
+    secMap[d.sector].push(d.composite||0);
+  });
+  const topSector = Object.entries(secMap)
+    .map(([s,v]) => [s, v.reduce((a,b)=>a+b,0)/v.length])
+    .sort((a,b) => b[1]-a[1])[0][0];
+
+  document.getElementById('statTotal').textContent = total;
+  document.getElementById('statAvg').textContent = avgComp;
+  document.getElementById('statTopSector').textContent = topSector.replace('Information Technology','Info Tech').replace('Communication Services','Comm Svcs').replace('Consumer Discretionary','Cons Disc').replace('Consumer Staples','Cons Staples');
+  document.getElementById('statSS8').textContent = ss8;
+  document.getElementById('statTR').textContent = Math.round(trCov/total*100) + '%';
+
+  // Sector filter buttons
+  const sectors = ['ALL', ...Object.keys(SECTOR_COLORS)].filter(s =>
+    s === 'ALL' || allData.some(d => d.sector === s));
+  const container = document.getElementById('sectorFilters');
+  sectors.forEach(s => {
+    const btn = document.createElement('button');
+    btn.className = 'sector-btn' + (s === 'ALL' ? ' active' : '');
+    btn.textContent = s === 'ALL' ? 'ALL SECTORS' :
+      s.replace('Information Technology','INFO TECH')
+       .replace('Communication Services','COMM SVCS')
+       .replace('Consumer Discretionary','CONS DISC')
+       .replace('Consumer Staples','CONS STAPLES')
+       .replace('Health Care','HEALTH')
+       .toUpperCase();
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.sector-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentSector = s;
+      renderTable();
+    });
+    container.appendChild(btn);
+  });
+
+  // Events
+  document.getElementById('search').addEventListener('input', e => {
+    currentSearch = e.target.value.toLowerCase();
+    renderTable();
+  });
+  document.getElementById('sortSelect').addEventListener('change', e => {
+    currentSort = e.target.value;
+    renderTable();
+  });
+
+  // Column sort
+  document.querySelectorAll('thead th[data-col]').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      const colToSort = {
+        rank:'rank_asc', ticker:'ticker_asc', composite:'composite_desc',
+        valuation:'valuation_desc', smartscore:'smartscore_desc',
+        perf12:'perf12_desc', perf3:'perf3_desc', coverage:'coverage_desc',
+        roe:'roe_desc', margin:'margin_desc', revgrowth:'revgrowth_desc',
+      };
+      if(colToSort[col]) {
+        currentSort = colToSort[col];
+        document.getElementById('sortSelect').value = currentSort;
+        renderTable();
+      }
+    });
+  });
+
+  renderTable();
+}
+
+function applyFiltersAndSort() {
+  let data = [...allData];
+
+  if(currentSector !== 'ALL')
+    data = data.filter(d => d.sector === currentSector);
+
+  if(currentSearch)
+    data = data.filter(d =>
+      d.ticker.toLowerCase().includes(currentSearch) ||
+      (d.company||'').toLowerCase().includes(currentSearch));
+
+  const [field, dir] = currentSort.split('_');
+  const asc = dir === 'asc';
+  const key = {
+    rank:'rank', composite:'composite', valuation:'valuation',
+    smartscore:'tr_smartscore', momentum:'momentum', perf12:'perf_12m',
+    roe:'roe', margin:'net_margin', revgrowth:'rev_growth',
+    coverage:'coverage', ticker:'ticker', valuation:'valuation',
+  }[field] || 'rank';
+
+  data.sort((a,b) => {
+    const av = a[key], bv = b[key];
+    if(av===null||av===undefined) return 1;
+    if(bv===null||bv===undefined) return -1;
+    return asc ? (av>bv?1:-1) : (av<bv?1:-1);
+  });
+
+  return data;
+}
+
+function renderTable() {
+  filteredData = applyFiltersAndSort();
+  document.getElementById('showCount').innerHTML = `<span>${filteredData.length}</span>`;
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '';
+
+  filteredData.forEach((d, i) => {
+    const sc = SECTOR_COLORS[d.sector] || { bg:'#1a1a1a', color:'#999' };
+    const ssC = ssColor(d.tr_smartscore);
+    const compColor = scoreColor(d.composite);
+    const rankClass = d.rank <= 3 ? 'top3' : '';
+
+    const tr = document.createElement('tr');
+    tr.dataset.ticker = d.ticker;
+    tr.innerHTML = `
+      <td class="td-rank ${rankClass}">${d.rank}</td>
+      <td class="td-ticker">
+        <a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank">${d.ticker}</a>
+      </td>
+      <td class="td-company" title="${d.company||''}">${(d.company||'').substring(0,26)}</td>
+      <td>
+        <span class="sector-pill" style="background:${sc.bg};color:${sc.color}">
+          ${(d.sector||'').replace('Information Technology','IT').replace('Communication Services','Comm').replace('Consumer Discretionary','Cons Disc').replace('Consumer Staples','Cons Stpl')}
+        </span>
+      </td>
+      <td>
+        <div class="score-cell">
+          <span class="score-num" style="color:${compColor}">${d.composite ? d.composite.toFixed(1) : '—'}</span>
+          <div class="score-bar-bg">
+            <div class="score-bar-fill" style="width:${d.composite||0}%;background:${compColor}"></div>
+          </div>
+        </div>
+      </td>
+      <td class="td-num ${d.valuation >= 60 ? 'pos' : d.valuation <= 30 ? 'neg' : 'neutral'}">${fmtNum(d.valuation)}</td>
+      <td>
+        <span class="ss-badge" style="background:${ssC.bg};color:${ssC.color}">
+          ${d.tr_smartscore || '—'}
+        </span>
+      </td>
+      <td style="font-size:11px;color:${d.tr_consensus==='StrongBuy'?'#00e676':d.tr_consensus==='Hold'?'#ffd600':d.tr_consensus&&d.tr_consensus.includes('Buy')?'#69f0ae':'#ff5252'}">
+        ${(d.tr_consensus||'—').replace('Moderate','Mod ')}
+      </td>
+      <td class="td-num neutral">${fmtNum(d.pe)}</td>
+      <td class="td-num neutral">${fmtNum(d.fwd_pe)}</td>
+      <td class="td-num neutral">${fmtNum(d.ev_ebitda)}</td>
+      <td class="td-num ${numClass(d.roe)}">${fmtNum(d.roe, 1, '%')}</td>
+      <td class="td-num ${numClass(d.net_margin)}">${fmtNum(d.net_margin, 1, '%')}</td>
+      <td class="td-num ${numClass(d.rev_growth)}">${fmtNum(d.rev_growth, 1, '%')}</td>
+      <td class="td-num ${numClass(d.fcf_yield)}">${fmtNum(d.fcf_yield, 1, '%')}</td>
+      <td class="td-num ${numClass(d.perf_12m)}">${fmtNum(d.perf_12m, 1, '%')}</td>
+      <td class="td-num ${numClass(d.perf_3m)}">${fmtNum(d.perf_3m, 1, '%')}</td>
+      <td class="td-num neutral">${fmtNum(d.beta, 2)}</td>
+      <td class="td-num neutral">${fmtNum(d.coverage, 0, '%')}</td>
+    `;
+
+    // Expanded pillar row
+    const trDetail = document.createElement('tr');
+    trDetail.className = 'pillar-row';
+    trDetail.dataset.parent = d.ticker;
+    trDetail.innerHTML = `
+      <td colspan="19">
+        <div class="pillar-inner">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:2px;margin-bottom:12px">
+            PILLAR BREAKDOWN — ${d.ticker} · ${d.company||''}
+          </div>
+          <div class="pillar-grid">
+            ${[
+              ['VALUATION', d.p_valuation],
+              ['PROFITAB.', d.p_profitability],
+              ['GROWTH',    d.p_growth],
+              ['EQ QUAL',   d.p_eq],
+              ['FCF QUAL',  d.p_fcf],
+              ['FIN HEALTH',d.p_health],
+              ['MOMENTUM',  d.p_momentum],
+              ['ANALYST',   d.p_analyst],
+              ['PIOTROSKI', d.p_piotroski],
+            ].map(([name, val]) => `
+              <div class="pillar-item">
+                <div class="pillar-name">${name}</div>
+                <div class="pillar-score" style="color:${pillarColor(val)}">${val ? val.toFixed(0) : '—'}</div>
+                <div class="pillar-bar-bg">
+                  <div class="pillar-bar-fill" style="width:${val||0}%;background:${pillarColor(val)}"></div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="pillar-extra">
+            ${[
+              ['Price', d.price ? '$'+d.price.toFixed(2) : '—'],
+              ['Market Cap', d.market_cap ? '$'+(d.market_cap/1e9).toFixed(1)+'B' : '—'],
+              ['Altman Z', d.altman_z ? d.altman_z.toFixed(2) : '—'],
+              ['Piotroski F', d.piotroski_f !== null ? d.piotroski_f : '—'],
+              ['Div Yield', d.div_yield ? d.div_yield.toFixed(2)+'%' : '—'],
+              ['vs Sector', d.vs_sector ? (d.vs_sector>0?'+':'')+d.vs_sector.toFixed(1) : '—'],
+            ].map(([label, val]) => `
+              <div class="pillar-extra-item">
+                <div class="pillar-extra-label">${label}</div>
+                <div class="pillar-extra-value">${val}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </td>
+    `;
+
+    tr.addEventListener('click', () => {
+      const isOpen = trDetail.classList.contains('open');
+      // close all
+      document.querySelectorAll('.pillar-row.open').forEach(r => r.classList.remove('open'));
+      document.querySelectorAll('tr.expanded').forEach(r => r.classList.remove('expanded'));
+      if(!isOpen) {
+        trDetail.classList.add('open');
+        tr.classList.add('expanded');
+      }
+    });
+
+    tbody.appendChild(tr);
+    tbody.appendChild(trDetail);
+  });
+}
+
+loadData();
+</script>
+</body>
+</html>
