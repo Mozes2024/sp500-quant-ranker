@@ -1,12 +1,15 @@
-name: Daily S&P 500 Ranking v5.2
+name: Daily S&P 500 Ranking v5.3
+
 on:
   schedule:
-    - cron: '0 13 * * *'   # 13:00 UTC = 15:00 ישראל
-  workflow_dispatch:         # הפעלה ידנית מ-GitHub UI
+    - cron: '0 13 * * 1-5'   # גיבוי - רץ ב-13:00 UTC אם הסקרינר לא הפעיל
+  repository_dispatch:
+    types: [screener-update]  # ← מופעל אוטומטית ע"י MOZES_stock-screener
+  workflow_dispatch:           # הפעלה ידנית
 
 permissions:
-  contents: write            # נדרש לעדכן sp500_data.json בrepo
-  pages: write               # נדרש ל-GitHub Pages
+  contents: write
+  pages: write
   id-token: write
 
 jobs:
@@ -17,6 +20,18 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Log trigger source
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "🔗 Triggered automatically by MOZES_stock-screener"
+            echo "   Scan date: ${{ github.event.client_payload.scan_date }}"
+            echo "   Signals:   ${{ github.event.client_payload.signals_count }}"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "⏰ Triggered by schedule (screener may not have run yet)"
+          else
+            echo "👤 Triggered manually"
+          fi
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -38,9 +53,17 @@ jobs:
           restore-keys: |
             sp500-cache-v5-${{ runner.os }}-
 
-      - name: Fetch breakout signals from screener
+      - name: Verify breakout signals
         run: |
-          curl -sf "https://raw.githubusercontent.com/Mozes2024/MOZES_stock-screener/main/breakout_signals.json"                -o breakout_signals.json             && echo "✅ breakout_signals.json loaded"             || echo "⚠  Screener signals not found — continuing without"
+          if [ -f "breakout_signals.json" ]; then
+            SIGNALS=$(python3 -c "import json; d=json.load(open('breakout_signals.json')); print(d.get('top_signals_count', 0))")
+            SCAN=$(python3 -c "import json; d=json.load(open('breakout_signals.json')); print(d.get('scan_date',''))")
+            echo "✅ breakout_signals.json ready: $SIGNALS signals (scan: $SCAN)"
+          else
+            echo "⚠ breakout_signals.json missing — fetching fallback..."
+            curl -sf "https://raw.githubusercontent.com/Mozes2024/MOZES_stock-screener/main/breakout_signals.json" \
+                 -o breakout_signals.json && echo "✅ Fetched from screener" || echo "⚠ Not available"
+          fi
 
       - name: Run ranking pipeline
         run: python sp500_github.py
@@ -57,7 +80,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifacts (Excel + Charts + JSON)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sp500-ranking-${{ github.run_number }}
@@ -67,7 +90,7 @@ jobs:
       - name: Deploy dashboard to GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'          # מגיש את index.html + sp500_data.json מהroot
+          path: '.'
 
   deploy-pages:
     needs: rank
