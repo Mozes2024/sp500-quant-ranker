@@ -175,7 +175,7 @@ td{padding:11px 8px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis
 <div class="controls" id="controls" style="display:none">
   <div class="search-wrap"><span class="search-icon">⌕</span><input type="text" id="search" placeholder="Search ticker or company…"></div>
   <button class="filter-toggle" id="filterToggle" onclick="toggleFilter()">⚙ <span id="lbl-filters">FILTERS</span></button>
-  <div class="sector-filters" id="sectorFilters"></div>
+  <select id="sectorSelect" class="filter-select" style="min-width:190px;font-weight:600;padding:7px 10px;font-size:12px;" onchange="onSectorChange(this.value)"><option value="ALL">All Sectors</option></select>
   <div class="count-badge"><span id="showCount">—</span> <span id="lbl-stocks">stocks</span></div>
 </div>
 
@@ -285,7 +285,24 @@ function init(){
   renderTable();
 }
 
-function buildSectorBtns(){const c=document.getElementById('sectorFilters');c.innerHTML='';const sectors=['ALL',...Object.keys(SECTOR_COLORS).filter(s=>allData.some(d=>d.sector===s))];const sMap=(T[lang]||T.en).sectors||T.en.sectors;sectors.forEach(s=>{const btn=document.createElement('button');btn.className='sector-btn'+(s==='ALL'?' active':'');btn.textContent=s==='ALL'?tl('allsectors'):(lang==='he'?(sMap[s]||s):s.replace('Information Technology','IT').replace('Communication Services','COMM').replace('Consumer Discretionary','CONS D').replace('Consumer Staples','CONS S').replace('Health Care','HEALTH').toUpperCase());btn.addEventListener('click',()=>{document.querySelectorAll('.sector-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentSector=s;renderTable();});c.appendChild(btn);});}
+function buildSectorBtns(){
+  const sel=document.getElementById('sectorSelect');
+  const prev=sel.value||'ALL';
+  sel.innerHTML='';
+  const sMap=(T[lang]||T.en).sectors||T.en.sectors;
+  const allOpt=document.createElement('option');
+  allOpt.value='ALL';
+  allOpt.textContent=tl('allsectors');
+  sel.appendChild(allOpt);
+  Object.keys(SECTOR_COLORS).filter(s=>allData.some(d=>d.sector===s)).forEach(s=>{
+    const opt=document.createElement('option');
+    opt.value=s;
+    opt.textContent=lang==='he'?(sMap[s]||s):s;
+    sel.appendChild(opt);
+  });
+  sel.value=prev;
+}
+function onSectorChange(val){currentSector=val;renderTable();}
 function buildViewTabs(){const c=document.getElementById('viewTabs');c.innerHTML='';Object.keys(buildViews()).forEach(view=>{const btn=document.createElement('button');btn.className='view-tab'+(view===currentView?' active':'');btn.textContent=ttab(view);btn.dataset.view=view;btn.addEventListener('click',()=>{document.querySelectorAll('.view-tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');currentView=view;sortCol='rank';sortAsc=true;renderTable();});c.appendChild(btn);});}
 function toggleFilter(){const panel=document.getElementById('filterPanel'),btn=document.getElementById('filterToggle');const open=panel.classList.toggle('open');btn.classList.toggle('open',open);}
 function resetFilters(){['fCompMin','fCompMax','fSSMin','fConsensus','fPEMax','fPerfMin','fValMin'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});renderTable();}
