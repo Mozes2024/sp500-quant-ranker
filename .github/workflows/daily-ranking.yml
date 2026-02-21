@@ -38,6 +38,10 @@ jobs:
           restore-keys: |
             sp500-cache-v5-${{ runner.os }}-
 
+      - name: Fetch breakout signals from screener
+        run: |
+          curl -sf "https://raw.githubusercontent.com/Mozes2024/MOZES_stock-screener/main/breakout_signals.json"                -o breakout_signals.json             && echo "✅ breakout_signals.json loaded"             || echo "⚠  Screener signals not found — continuing without"
+
       - name: Run ranking pipeline
         run: python sp500_github.py
         env:
