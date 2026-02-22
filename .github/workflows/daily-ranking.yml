@@ -28,6 +28,7 @@ jobs:
         run: |
           echo "Triggered by: ${{ github.event_name }}"
           echo "Repository: ${{ github.repository }}"
+          echo "Ref: ${{ github.ref }}"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -36,7 +37,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install pandas yfinance requests
 
       - name: Restore S&P 500 cache (7 days)
@@ -61,14 +62,30 @@ jobs:
 
       - name: Commit sp500_data.json to repo
         run: |
+          set -e
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # קודם כל מסתנכרנים עם ה-remote
+          # אם יש שינויים (לרוב sp500_data.json ועוד), עושים stash כדי לאפשר pull --rebase
+          if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git status --porcelain)" ]; then
+            echo "Working directory has changes - stashing before rebase..."
+            git stash push -u -m "pre-rebase-changes"
+          else
+            echo "Working directory clean."
+          fi
+
+          # מסנכרנים עם ה-remote
           git fetch origin main
           git pull --rebase origin main
 
-          # עכשיו מוסיפים שינויים
+          # מחזירים את השינויים מה-stash אם יש
+          if git stash list | grep -q "pre-rebase-changes"; then
+            echo "Restoring stashed changes..."
+            git stash pop
+          fi
+
+          # מוסיפים רק את הקובץ הרלוונטי
           git add sp500_data.json
 
           if git diff --staged --quiet; then
@@ -78,7 +95,8 @@ jobs:
 
           git commit -m "📊 Update ranking data $(date +'%Y-%m-%d %H:%M')"
 
-          git push
+          # Push עם ניסיון נוסף במקרה של עדכון נוסף בינתיים
+          git push || (git pull --rebase origin main && git push)
 
       - name: Deploy dashboard to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
