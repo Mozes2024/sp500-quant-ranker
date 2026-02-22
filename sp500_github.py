@@ -699,6 +699,11 @@ def load_cache() -> "pd.DataFrame | None":
         age = datetime.now() - ts
         if age < timedelta(hours=CFG["cache_hours"]):
             print(f"✅  Cache loaded ({int(age.total_seconds()//60)} min old)")
+            # Guard: if cache is missing newer computed columns, ignore it to avoid blank UI fields
+            required_cols = ["pillar_cash_flow", "pillar_balance_sheet", "altman_z", "piotroski_f"]
+            if any(c not in data.columns for c in required_cols):
+                print("  ⚠️  Cache missing required columns — rebuilding")
+                return None
             return data
         print(f"  ℹ️  Cache expired ({int(age.total_seconds()//3600)}h old) — refreshing")
     except Exception as e:
