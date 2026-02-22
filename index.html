@@ -1,1350 +1,374 @@
-#  S&P 500 ADVANCED RANKING SYSTEM  v5.2 – GitHub Edition
-#  Headless · Actions Cache · Parallel Fetch · Full Pipeline
-#  Runs as a scheduled GitHub Actions job – no widgets/Colab
-#  Outputs: artifacts/sp500_ranking_v5.2.xlsx + 6 PNGs
-# ============================================================
-
-import subprocess, sys, os, pickle, time, shutil
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-subprocess.check_call([
-    sys.executable, "-m", "pip", "install",
-    "yfinance", "pandas", "numpy", "openpyxl==3.1.2",
-    "requests", "beautifulsoup4", "matplotlib", "seaborn",
-    "tqdm", "scipy", "-q",
-])
-
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import requests
-import warnings
-from bs4 import BeautifulSoup
-from tqdm import tqdm
-from scipy.stats import percentileofscore
-import matplotlib
-matplotlib.use("Agg")          # headless – no display needed
-import matplotlib.pyplot as plt
-import seaborn as sns
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.formatting.rule import ColorScaleRule
-
-warnings.filterwarnings("ignore")
-pd.set_option("display.max_columns", None)
-pd.set_option("display.float_format", "{:.2f}".format)
-
-os.makedirs("artifacts", exist_ok=True)
-
-
-# ════════════════════════════════════════════════════════════
-#  CONFIGURATION
-# ════════════════════════════════════════════════════════════
-CFG = {
-    "weights": {
-        "valuation":        0.19,
-        "profitability":    0.16,
-        "growth":           0.13,
-        "earnings_quality": 0.08,
-        "fcf_quality":      0.13,
-        "financial_health": 0.09,
-        "momentum":         0.09,
-        "analyst":          0.11,
-        "piotroski":        0.02,
-    },
-    "min_coverage":    0.45,
-    "min_market_cap":  5_000_000_000,
-    "min_avg_volume":  500_000,
-    "cache_hours":     24,
-    "sleep_tr":        0.35,
-    "batch_size_tr":   10,
-    "max_workers_yf":  20,
-    "output_file":     "artifacts/sp500_ranking_v5.2.xlsx",
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S&P 500 Mozes Ranker</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#070c12; --surface:#0c1520; --surface2:#111d2b; --surface3:#162436;
+  --border:#1d2e40; --border2:#243a50;
+  --gold:#f5a623; --gold2:#ffc15e; --gold3:#fff3d6;
+  --teal:#00d4aa; --teal2:#00f5c4; --red:#ff4757; --red2:#ff6b81;
+  --blue:#4dabf7; --purple:#cc5de8; --green:#51cf66; --orange:#ff922b;
+  --text:#dce8f4; --text2:#8aaccb; --text3:#4a6a8a; --text4:#2d4a65;
+  --mono:'JetBrains Mono',monospace; --sans:'Inter',sans-serif;
 }
-assert abs(sum(CFG["weights"].values()) - 1.0) < 1e-6, "Weights must sum to 1.0"
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;font-size:15px;}
+body.rtl{direction:rtl;}
+header{padding:14px 28px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:linear-gradient(180deg,#0a1520 0%,var(--bg) 100%);position:sticky;top:0;z-index:300;}
+.logo-title{font-size:20px;font-weight:900;color:#fff;letter-spacing:-.5px;}
+.logo-title .logo-accent{color:var(--gold);}
+.logo-sub{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:1.5px;margin-top:2px;}
+.header-right{display:flex;align-items:center;gap:14px;}
+.live-dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 8px var(--teal);display:inline-block;margin-right:6px;animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.5)}}
+.last-updated{font-family:var(--mono);font-size:11px;color:var(--text2);}
+.lang-wrap{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+.lang-btn{padding:5px 13px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;border:none;background:transparent;color:var(--text3);letter-spacing:.5px;}
+.lang-btn.active{background:var(--gold);color:#000;}
+.stats-bar{display:grid;grid-template-columns:repeat(5,1fr);border-bottom:1px solid var(--border);}
+.stat-item{padding:14px 24px;border-right:1px solid var(--border);}
+.stat-item:last-child{border-right:none;}
+.stat-label{font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:5px;}
+.stat-value{font-size:26px;font-weight:900;color:#fff;letter-spacing:-1px;}
+.stat-accent{color:var(--gold);}
+.controls{padding:12px 28px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:61px;z-index:200;}
+.search-wrap{position:relative;flex:0 0 230px;}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:14px;}
+#search{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px 8px 32px;font-family:var(--sans);font-size:13px;color:var(--text);outline:none;}
+#search:focus{border-color:var(--gold);}
+#search::placeholder{color:var(--text3);}
+.filter-toggle{padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;}
+.filter-toggle:hover,.filter-toggle.open{border-color:var(--teal);color:var(--teal);}
+.filter-panel{display:none;padding:14px 28px;gap:14px;flex-wrap:wrap;align-items:flex-end;border-bottom:1px solid var(--border);background:#090f18;}
+.filter-panel.open{display:flex;}
+.filter-group{display:flex;flex-direction:column;gap:5px;}
+.filter-label{font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;}
+.filter-range{display:flex;align-items:center;gap:6px;}
+.filter-input{width:78px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-family:var(--mono);font-size:12px;color:var(--text);outline:none;}
+.filter-input:focus{border-color:var(--teal);}
+.filter-range span{color:var(--text3);}
+.filter-select{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-size:12px;color:var(--text);outline:none;cursor:pointer;}
+.filter-reset{padding:6px 14px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text3);font-size:12px;font-weight:600;cursor:pointer;}
+.filter-reset:hover{border-color:var(--red);color:var(--red);}
+.sector-filters{display:flex;gap:5px;flex-wrap:wrap;flex:1;}
+.sector-btn{padding:5px 11px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.sector-btn:hover{border-color:var(--gold);color:var(--gold);}
+.sector-btn.active{background:var(--gold);border-color:var(--gold);color:#000;}
+.count-badge{font-size:13px;font-weight:600;color:var(--text2);margin-left:auto;white-space:nowrap;}
+.count-badge span{color:var(--gold);}
+.view-tabs{padding:0 28px;display:flex;gap:2px;border-bottom:2px solid var(--border);background:var(--surface);position:sticky;top:107px;z-index:190;overflow-x:auto;}
+.view-tabs::-webkit-scrollbar{height:3px;}
+.view-tabs::-webkit-scrollbar-thumb{background:var(--border);}
+.view-tab{padding:11px 18px;font-size:13px;font-weight:600;color:var(--text2);cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent;margin-bottom:-2px;transition:all .2s;background:transparent;border-top:none;border-left:none;border-right:none;}
+.view-tab:hover{color:var(--text);background:rgba(255,255,255,.03);}
+.view-tab.active{color:var(--gold);border-bottom-color:var(--gold);background:rgba(245,166,35,.06);}
+.table-wrap{overflow-x:auto;padding:0 28px 80px;}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;table-layout:fixed;}
+.col-rank{width:44px;}.col-ticker{width:76px;}.col-company{width:175px;}.col-sector{width:125px;}.col-data{width:105px;}
+thead th{padding:10px 8px;text-align:center;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text2);border-bottom:2px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;transition:color .15s;overflow:hidden;position:relative;}
+thead th:hover{color:var(--gold2);}
+thead th.sorted{color:var(--gold);}
+thead th.sorted::after{content:' ↓';}
+thead th.sorted.asc::after{content:' ↑';}
+.th-wrap{position:relative;display:inline-block;width:100%;}
+.th-tip{visibility:hidden;opacity:0;position:fixed;background:#0d1e2e;border:1px solid var(--border2);color:var(--text);font-size:12px;font-family:var(--sans);font-weight:400;letter-spacing:0;text-transform:none;white-space:normal;padding:10px 14px;border-radius:7px;width:230px;line-height:1.6;z-index:9999;box-shadow:0 12px 40px #000d;pointer-events:none;transition:opacity .15s;}
+thead th:hover .th-tip{visibility:visible;opacity:1;}
+tbody tr{border-bottom:1px solid #0a1520;transition:background .1s;cursor:pointer;}
+tbody tr:hover{background:var(--surface2);}
+tbody tr.expanded{background:var(--surface2);}
+td{padding:11px 8px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.td-rank{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text3);text-align:center;}
+.td-rank.top3{color:var(--gold2);}
+.td-ticker{font-family:var(--mono);font-size:14px;font-weight:800;color:#fff;}
+.td-ticker a{color:inherit;text-decoration:none;border-bottom:1px solid transparent;transition:all .15s;}
+.td-ticker a:hover{color:var(--gold);border-color:var(--gold);}
+.td-company{color:var(--text2);font-size:12px;font-weight:500;}
+.sector-pill{display:inline-block;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap;}
+.score-cell{display:flex;align-items:center;gap:7px;}
+.score-num{font-family:var(--mono);font-size:13px;font-weight:700;width:38px;text-align:right;flex-shrink:0;}
+.score-bar-bg{flex:1;height:5px;background:var(--border);border-radius:3px;overflow:hidden;}
+.score-bar-fill{height:100%;border-radius:3px;transition:width .3s;}
+.td-num{font-family:var(--mono);font-size:12px;text-align:center;font-weight:500;}
+.td-num.pos{color:var(--teal);}
+.td-num.neg{color:var(--red2);}
+.td-num.neutral{color:var(--text2);}
+.td-num.hi{color:#74e8c0;}
+.td-num.lo{color:#ff8596;}
+.td-num.mid{color:var(--gold2);}
+.ss-badge{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;font-family:var(--mono);font-size:12px;font-weight:800;}
+.stock-detail-row{display:none;background:#060c14;border-bottom:2px solid var(--border);}
+.stock-detail-row.open{display:table-row;}
+.stock-detail-inner{padding:20px 52px 28px;}
+.detail-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+.detail-ticker-big{font-family:var(--mono);font-size:22px;font-weight:800;color:#fff;}
+.detail-company-name{font-size:14px;font-weight:500;color:var(--text2);}
+.detail-price{font-family:var(--mono);font-size:22px;font-weight:800;color:var(--gold);}
+.detail-pill-sector{padding:4px 10px;border-radius:4px;font-size:11px;font-weight:700;}
+.detail-tabs{display:flex;gap:3px;border-bottom:1px solid var(--border);margin-bottom:16px;}
+.detail-tab{padding:7px 15px;font-size:12px;font-weight:600;color:var(--text3);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;background:none;border-top:none;border-left:none;border-right:none;white-space:nowrap;}
+.detail-tab:hover{color:var(--text);}
+.detail-tab.active{color:var(--teal);border-bottom-color:var(--teal);}
+.pillar-grid{display:grid;grid-template-columns:repeat(9,1fr);gap:10px;margin-bottom:20px;}
+.pillar-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;}
+.pillar-card-name{font-size:9px;font-weight:700;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px;}
+.pillar-card-score{font-size:24px;font-weight:900;margin-bottom:6px;}
+.pillar-bar-bg{height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
+.pillar-bar-fill{height:100%;border-radius:2px;}
+.metrics-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;}
+.metric-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:11px 13px;}
+.metric-label{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px;}
+.metric-value{font-family:var(--mono);font-size:15px;font-weight:700;color:#fff;}
+.metric-value.pos{color:var(--teal);}
+.metric-value.neg{color:var(--red2);}
+.metric-value.gold{color:var(--gold);}
+.metric-sub{font-size:10px;color:var(--text3);margin-top:2px;}
+.val-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;}
+.val-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;}
+.val-label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;}
+.val-num{font-family:var(--mono);font-size:18px;font-weight:800;color:#fff;}
+.tr-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+.tr-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;}
+.tr-card-title{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;}
+.tr-card-main{font-family:var(--mono);font-size:20px;font-weight:800;color:#fff;margin-bottom:4px;}
+.tr-card-sub{font-size:12px;color:var(--text2);}
+.ss-big{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:10px;font-family:var(--mono);font-size:22px;font-weight:800;margin-bottom:6px;}
+.sentiment-bar{height:8px;border-radius:4px;background:var(--border);overflow:hidden;margin:6px 0;}
+.sentiment-fill{height:100%;border-radius:4px;}
+#loading{display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:20px;}
+.spinner{width:44px;height:44px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{font-size:13px;font-weight:600;color:var(--text2);letter-spacing:2px;animation:blink 1.5s infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+#error-msg{display:none;text-align:center;padding:60px;color:var(--red);}
+.double-signal-row td:first-child{border-left:3px solid var(--gold);}
+.double-signal-row{background:linear-gradient(90deg,rgba(245,166,35,.07) 0%,transparent 60%)!important;}
+.double-signal-row:hover{background:linear-gradient(90deg,rgba(245,166,35,.13) 0%,transparent 60%)!important;}
+.ds-badge{display:inline-flex;align-items:center;gap:3px;background:linear-gradient(135deg,#2a1f00,#3d2e00);border:1px solid var(--gold);border-radius:5px;padding:2px 6px;font-size:10px;font-weight:800;color:var(--gold);letter-spacing:.5px;white-space:nowrap;vertical-align:middle;box-shadow:0 0 8px rgba(245,166,35,.3);}
+::-webkit-scrollbar{width:4px;height:4px;}
+::-webkit-scrollbar-track{background:var(--bg);}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo-block">
+    <div class="logo-title">S&amp;P 500 <span class="logo-accent">Mozes</span> Ranker</div>
+    <div class="logo-sub">v5.3 · 9-Pillar + Breakout Scanner</div>
+  </div>
+  <div class="header-right">
+    <div class="last-updated" id="lastUpdated"><span class="live-dot"></span>Loading...</div>
+    <div class="lang-wrap">
+      <button class="lang-btn active" id="btnEn" onclick="setLang('en')">EN</button>
+      <button class="lang-btn" id="btnHe" onclick="setLang('he')">עב</button>
+    </div>
+  </div>
+</header>
 
-CACHE_FILE = "sp500_cache_v5.pkl"
+<div class="stats-bar" id="statsBar" style="display:none">
+  <div class="stat-item"><div class="stat-label" id="lbl-ranked">Stocks Ranked</div><div class="stat-value" id="statTotal">—</div></div>
+  <div class="stat-item"><div class="stat-label" id="lbl-avg">Avg Composite</div><div class="stat-value stat-accent" id="statAvg">—</div></div>
+  <div class="stat-item"><div class="stat-label" id="lbl-topsec">Top Sector</div><div class="stat-value" id="statTopSector" style="font-size:16px;margin-top:4px">—</div></div>
+  <div class="stat-item"><div class="stat-label" id="lbl-ss8">SmartScore ≥ 8</div><div class="stat-value stat-accent" id="statSS8">—</div></div>
+  <div class="stat-item"><div class="stat-label" id="lbl-tr">TR Coverage</div><div class="stat-value" id="statTR">—</div></div>
+</div>
 
+<div class="controls" id="controls" style="display:none">
+  <div class="search-wrap"><span class="search-icon">⌕</span><input type="text" id="search" placeholder="Search ticker or company…"></div>
+  <button class="filter-toggle" id="filterToggle" onclick="toggleFilter()">⚙ <span id="lbl-filters">FILTERS</span></button>
+  <select id="sectorSelect" class="filter-select" style="min-width:190px;font-weight:600;padding:7px 10px;font-size:12px;" onchange="onSectorChange(this.value)"><option value="ALL">All Sectors</option></select>
+  <div class="count-badge"><span id="showCount">—</span> <span id="lbl-stocks">stocks</span></div>
+</div>
 
-# ════════════════════════════════════════════════════════════
-#  TIPRANKS
-# ════════════════════════════════════════════════════════════
-TR_URL = "https://mobile.tipranks.com/api/stocks/stockAnalysisOverview"
-TR_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer":         "https://www.tipranks.com/",
-    "Origin":          "https://www.tipranks.com",
-    "Connection":      "keep-alive",
-    "Sec-Fetch-Dest":  "empty",
-    "Sec-Fetch-Mode":  "cors",
-    "Sec-Fetch-Site":  "same-site",
-}
+<div class="filter-panel" id="filterPanel">
+  <div class="filter-group"><div class="filter-label" id="lbl-f-composite">Composite Score</div><div class="filter-range"><input type="number" id="fCompMin" placeholder="Min" class="filter-input" min="0" max="100"><span>–</span><input type="number" id="fCompMax" placeholder="Max" class="filter-input" min="0" max="100"></div></div>
+  <div class="filter-group"><div class="filter-label" id="lbl-f-ss">SmartScore Min</div><select id="fSSMin" class="filter-select"><option value="">Any</option><option value="8">≥ 8</option><option value="9">≥ 9</option><option value="10">= 10</option></select></div>
+  <div class="filter-group"><div class="filter-label" id="lbl-f-consensus">Consensus</div><select id="fConsensus" class="filter-select"><option value="">Any</option><option value="StrongBuy">Strong Buy</option><option value="Buy">Buy</option><option value="Hold">Hold</option></select></div>
+  <div class="filter-group"><div class="filter-label" id="lbl-f-pe">P/E Max</div><input type="number" id="fPEMax" placeholder="e.g. 25" class="filter-input"></div>
+  <div class="filter-group"><div class="filter-label" id="lbl-f-perf">12M Return Min %</div><input type="number" id="fPerfMin" placeholder="e.g. 10" class="filter-input"></div>
+  <div class="filter-group"><div class="filter-label" id="lbl-f-valuation">Val. Score Min</div><input type="number" id="fValMin" placeholder="e.g. 60" class="filter-input"></div>
+  <button class="filter-reset" onclick="resetFilters()" id="lbl-f-reset">✕ Reset</button>
+</div>
 
-_CONSENSUS = {
-    "StrongBuy": 5, "Buy": 4, "Moderate Buy": 3.5,
-    "Hold": 3, "Moderate Sell": 2, "Sell": 1, "StrongSell": 0,
-}
-_TREND = {
-    "Increased": 1, "Unchanged": 0, "Decreased": -1,
-    "BoughtShares": 1, "SoldShares": -1,
-}
-_SENTIMENT = {
-    "VeryBullish": 5, "Bullish": 4, "Neutral": 3,
-    "Bearish": 2, "VeryBearish": 1,
-    "VeryPositive": 5, "Positive": 4,
-    "Negative": 2, "VeryNegative": 1,
-}
-_SMA = {"Positive": 1, "Neutral": 0, "Negative": -1}
+<div class="view-tabs" id="viewTabs" style="display:none"></div>
 
+<div id="loading"><div class="spinner"></div><div class="loading-text" id="loadingText">LOADING MARKET DATA...</div></div>
+<div id="error-msg" style="font-size:14px;">⚠ Could not load sp500_data.json — run the GitHub Actions workflow first.</div>
 
-def _parse_tipranks(item: dict) -> dict:
-    return {
-        "tr_smart_score":        item.get("smartScore"),
-        "tr_price_target":       item.get("convertedPriceTarget"),
-        "tr_insider_3m_usd":     item.get("insidersLast3MonthsSum"),
-        "tr_hedge_fund_value":   item.get("hedgeFundTrendValue"),
-        "tr_investor_chg_7d":    item.get("investorHoldingChangeLast7Days"),
-        "tr_investor_chg_30d":   item.get("investorHoldingChangeLast30Days"),
-        "tr_momentum_12m":       item.get("technicalsTwelveMonthsMomentum"),
-        "tr_roe":                item.get("fundamentalsReturnOnEquity"),
-        "tr_asset_growth":       item.get("fundamentalsAssetGrowth"),
-        "tr_blogger_bullish":    item.get("bloggerBullishSentiment"),
-        "tr_blogger_sector_avg": item.get("bloggerSectorAvg"),
-        "tr_news_bullish":       item.get("newsSentimentsBullishPercent"),
-        "tr_news_bearish":       item.get("newsSentimentsBearishPercent"),
-        "tr_consensus_num":      _CONSENSUS.get(item.get("analystConsensus"),  np.nan),
-        "tr_hedge_trend_num":    _TREND.get(item.get("hedgeFundTrend"),        np.nan),
-        "tr_insider_trend_num":  _TREND.get(item.get("insiderTrend"),          np.nan),
-        "tr_news_sent_num":      _SENTIMENT.get(item.get("newsSentiment"),     np.nan),
-        "tr_blogger_cons_num":   _SENTIMENT.get(item.get("bloggerConsensus"),  np.nan),
-        "tr_investor_sent_num":  _SENTIMENT.get(item.get("investorSentiment"), np.nan),
-        "tr_sma_num":            _SMA.get(item.get("sma"),                     np.nan),
-        "tr_analyst_consensus":  item.get("analystConsensus"),
-        "tr_hedge_trend":        item.get("hedgeFundTrend"),
-        "tr_insider_trend":      item.get("insiderTrend"),
-        "tr_news_sentiment":     item.get("newsSentiment"),
-        "tr_sma":                item.get("sma"),
-    }
+<div class="table-wrap" id="tableWrap" style="display:none">
+  <table id="mainTable"><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table>
+</div>
 
+<script>
+const T={en:{ranked:'Stocks Ranked',avg:'Avg Composite',topsec:'Top Sector',ss8:'SmartScore ≥ 8',tr:'TR Coverage',stocks:'stocks',searchph:'Search ticker or company…',filters:'FILTERS',reset:'✕ Reset',fcomposite:'Composite Score',fss:'SmartScore Min',fconsensus:'Consensus',fpe:'P/E Max',fperf:'12M Return Min %',fval:'Val. Score Min',loading:'LOADING MARKET DATA...',allsectors:'ALL SECTORS',topSectors:{'Information Technology':'Info Tech','Communication Services':'Comm Svcs','Consumer Discretionary':'Cons Disc','Consumer Staples':'Cons Staples','Health Care':'Health'},tabs:{score:'📊 Score',valuation:'💰 Valuation',profitability:'💹 Profitability',growth:'🚀 Growth',cashflow:'💵 Cash Flow',health:'🏦 Balance Sheet',momentum:'⚡ Momentum',analyst:'🔭 Analyst',tipranks:'🎯 TipRanks',breakout:'⚡ Breakout'},dtabs:{overview:'Overview',pillars:'Pillars',valuation:'Valuation',tipranks:'TipRanks'},cols:{rank:'#',ticker:'Ticker',company:'Company',sector:'Sector',composite:'Composite',valuation:'Valuation',smartscore:'SmartScore',consensus:'Consensus',pe:'P/E',fwd_pe:'Fwd P/E',peg:'PEG',ps:'P/S',pb:'P/B',ev_ebitda:'EV/EBITDA',fcf_yield:'FCF Yield %',pt_upside:'PT Upside %',div_yield:'Div Yield %',pillar_prof:'Pillar',roe:'ROE %',roa:'ROA %',roic:'ROIC %',net_margin:'Net Margin %',gross_margin:'Gross Margin %',op_margin:'Op. Margin %',eq_score:'EQ Score',piotroski_f:'Piotroski F',pillar_growth:'Pillar',rev_growth:'Rev Growth %',eps_growth:'EPS Growth %',fcf_margin:'FCF Margin %',tr_asset_gr:'Asset Growth %',pillar_fcf:'FCF Pillar',fcf_to_ni:'FCF/NI',payout_ratio:'Payout %',pillar_health:'Health Pillar',current_ratio:'Current Ratio',debt_equity:'Debt/Equity',altman_z:'Altman Z',beta:'Beta',pillar_mom:'Mom. Pillar',perf_12m:'12M %',perf_6m:'6M %',perf_3m:'3M %',perf_1m:'1M %',momentum:'Composite Mom.',tr_mom_12m:'TR Tech Mom.',pillar_analyst:'Analyst Pillar',analyst_mean:'Yahoo Rating',analysts:'# Analysts',tr_consensus:'TR Consensus',tr_pt_upside:'TR PT Upside %',tr_smartscore:'SmartScore',tr_news_bull:'News Bull. %',tr_blogger_bull:'Blogger Bull. %',tr_insider:'Insider',tr_hedge:'Hedge Fund',tr_inv_chg_30d:'Inv. 30D %',tr_inv_chg_7d:'Inv. 7D %',breakout_score:'Breakout Score',breakout_rank:'Scan Rank',breakout_phase:'Phase',breakout_rr:'Risk/Reward',breakout_rs:'Rel. Strength',breakout_stop:'Stop Loss',has_vcp:'VCP Pattern',vcp_quality:'VCP Quality',breakout_entry:'Entry Quality',vs_sector:'vs Sector',coverage:'Coverage %',p_profitability:'Profitab.',p_growth:'Growth',p_eq:'EQ Qual.',p_fcf:'FCF',p_health:'Health',p_momentum:'Momentum',p_analyst:'Analyst',p_piotroski:'Piotroski'},tips:{composite:'Weighted average of all 9 pillars (10–100). Higher = better overall quality + value.',valuation:'How cheap vs expensive vs sector peers. 100 = deeply undervalued.',smartscore:'TipRanks SmartScore 1–10: AI aggregation of analyst, news, insider and hedge fund signals.',pe:'Price / Earnings (trailing 12M). Lower = potentially cheaper.',fwd_pe:'Forward P/E on next 12M EPS estimate.',peg:'PEG Ratio = P/E ÷ EPS Growth. Below 1 = potentially undervalued relative to growth.',ps:'Price / Sales. Useful for high-growth companies with low/no profits.',pb:'Price / Book Value. Below 1 = trading below asset value.',ev_ebitda:'Enterprise Value / EBITDA. Key metric for comparing companies across capital structures.',fcf_yield:'Free Cash Flow / Market Cap. Higher = more cash generated per dollar invested.',pt_upside:'Analyst price target vs current price. % upside potential.',div_yield:'Annual dividend / share price. Income return on investment.',pillar_prof:'Profitability Pillar (0–100): composite of ROE, ROA, ROIC, net/gross/operating margins.',p_profitability:'Profitability Pillar (0–100): composite of ROE, ROA, ROIC, net/gross/operating margins.',roe:'Return on Equity: net income / equity.',roa:'Return on Assets: net income / total assets.',roic:'Return on Invested Capital: NOPAT / (equity + debt − cash).',net_margin:'Net income / revenue. % of each dollar of revenue that ends as profit.',gross_margin:'Gross profit / revenue. Efficiency of core production.',op_margin:'Operating income / revenue. Efficiency before interest & taxes.',eq_score:'Earnings Quality Score: measures sustainability of reported earnings (accruals, cash conversion).',piotroski_f:'Piotroski F-Score (0–9): 9 binary signals for financial strength. ≥7 = strong, ≤2 = weak.',pillar_growth:'Growth Pillar (0–100): composite of revenue growth, EPS growth, FCF margin, asset growth.',p_growth:'Growth Pillar (0–100): composite of revenue growth, EPS growth, FCF margin, asset growth.',rev_growth:'Year-over-year revenue growth.',eps_growth:'Year-over-year EPS (earnings per share) growth.',fcf_margin:'Free Cash Flow / Revenue. % of revenue converted to free cash.',tr_asset_gr:'Asset growth rate. Rapid asset growth can dilute returns.',pillar_fcf:'FCF Pillar (0–100): measures free cash flow yield, margin, conversion ratio, and dividend sustainability.',p_fcf:'FCF Pillar (0–100): measures free cash flow yield, margin, conversion ratio, and dividend sustainability.',fcf_to_ni:'FCF / Net Income. Ratio > 1 = earnings backed by real cash. < 0.5 = low quality earnings.',payout_ratio:'Dividends / Earnings. High payout limits reinvestment; negative = paying dividend at a loss.',pillar_health:'Balance Sheet Pillar (0–100): current ratio, debt/equity, Altman Z-Score.',p_health:'Balance Sheet Pillar (0–100): current ratio, debt/equity, Altman Z-Score.',current_ratio:'Current Assets / Current Liabilities. > 1.5 = healthy short-term liquidity.',debt_equity:'Total Debt / Equity. Higher = more leveraged. Industry-dependent.',altman_z:'Altman Z-Score: > 3 = safe, 1.8–3 = grey zone, < 1.8 = financial distress.',beta:'Price volatility vs S&P 500. > 1 = amplified moves (more risk & reward).',pillar_mom:'Momentum Pillar (0–100): composite of 12/6/3/1M returns vs sector peers.',p_momentum:'Momentum Pillar (0–100): composite of 12/6/3/1M returns vs sector peers.',perf_12m:'12-month price return. Strongest predictor in momentum factor investing.',perf_6m:'6-month price return.',perf_3m:'3-month price return.',perf_1m:'1-month price return. Short-term momentum indicator.',momentum:'Composite momentum: weighted average of 12M/6M/3M/1M returns.',tr_mom_12m:'TipRanks technical momentum score (12-month).',pillar_analyst:'Analyst Pillar (0–100): analyst rating, # of analysts, price target upside, TR consensus.',p_analyst:'Analyst Pillar (0–100): analyst rating, # of analysts, price target upside, TR consensus.',analyst_mean:'Yahoo Finance analyst mean rating. 1=Strong Buy, 3=Hold, 5=Strong Sell.',analysts:'Number of Wall Street analysts covering this stock.',tr_consensus:'TipRanks analyst consensus: Strong Buy / Buy / Hold / Sell.',tr_pt_upside:'TipRanks price target implied upside from current price.',tr_smartscore:'TipRanks SmartScore 1–10: AI aggregation of analyst, news, insider and hedge fund signals.',tr_news_bull:'% of recent news articles with bullish sentiment.',tr_blogger_bull:'% of financial bloggers with bullish outlook.',tr_insider:'Insider trading direction: Positive = buying, Negative = selling.',tr_hedge:'Hedge fund activity trend.',tr_inv_chg_30d:'Change in institutional investor holdings over 30 days.',tr_inv_chg_7d:'Change in institutional investor holdings over 7 days.',breakout_score:'Breakout Score (0–110): Minervini Trend Template score. Measures Stage 2 uptrend strength, RS momentum, volume, and fundamentals.',breakout_rank:'Rank among all breakout candidates in the scan.',breakout_phase:'Market stage: 1=Base, 2=Uptrend (buy zone), 3=Distribution (sell zone), 4=Downtrend.',breakout_rr:'Risk/Reward ratio. Minimum 2:1 required for inclusion. Higher = better setup.',breakout_rs:'Relative Strength vs SPY (63-day slope). > 1 = outperforming market.',breakout_stop:'Calculated stop loss price (ATR-based or swing low). Risk is managed to max 10%.',has_vcp:'VCP = Volatility Contraction Pattern (Minervini). Series of tighter contractions = institutional accumulation.',vcp_quality:'VCP quality score (0–100). Higher = tighter contractions, better setup.',breakout_entry:'Entry quality assessment: Ideal / Good / OK.',p_eq:'Earnings Quality Pillar (0–100): measures reliability and sustainability of reported earnings.',p_piotroski:'Piotroski F-Score Pillar (0–100): based on 9-point financial health score.',vs_sector:'Composite score minus the sector median. Positive = outperforming peers.',coverage:'Data completeness: % of the 17 core metrics available from data sources.'},detailLabels:{Price:'Price',MktCap:'Mkt Cap',AltmanZ:'Altman Z',PiotroskiF:'Piotroski F',DivYield:'Div Yield',vsSector:'vs Sector',Beta:'Beta',Analysts:'# Analysts',SmartScore:'SmartScore',Consensus:'TR Consensus',TRUpside:'TR PT Upside',Coverage:'Coverage'},sectors:{'Information Technology':'IT','Health Care':'Health','Financials':'Financials','Consumer Discretionary':'Cons D','Communication Services':'Comm','Industrials':'Industrials','Consumer Staples':'Cons S','Energy':'Energy','Real Estate':'Real Est.','Materials':'Materials','Utilities':'Utilities'},pillarNames:{VALUATION:'VALUATION',PROFITAB:'PROFITAB.',GROWTH:'GROWTH',EQ_QUAL:'EQ QUAL',FCF:'FCF',HEALTH:'HEALTH',MOMENTUM:'MOMENTUM',ANALYST:'ANALYST',PIOTROSKI:'PIOTROSKI'}},he:{ranked:'מניות מדורגות',avg:'ציון ממוצע',topsec:'סקטור מוביל',ss8:'ציון חכם ≥ 8',tr:'כיסוי TipRanks',stocks:'מניות',searchph:'חפש טיקר או חברה…',filters:'פילטרים',reset:'✕ איפוס',fcomposite:'ציון קומפוזיט',fss:'ציון חכם מינ.',fconsensus:'קונצנזוס',fpe:'P/E מקסימום',fperf:'תשואה 12M מינ. %',fval:'ציון שווי מינ.',loading:'טוען נתוני שוק...',allsectors:'כל הסקטורים',topSectors:{'Information Technology':'טכנולוגיה','Communication Services':'תקשורת','Consumer Discretionary':'צריכה מחזורית','Consumer Staples':'צריכה בסיסית','Health Care':'בריאות'},tabs:{score:'📊 ציון',valuation:'💰 שווי',profitability:'💹 רווחיות',growth:'🚀 צמיחה',cashflow:'💵 תזרים',health:'🏦 מאזן',momentum:'⚡ מומנטום',analyst:'🔭 אנליסטים',tipranks:'🎯 TipRanks',breakout:'⚡ פריצה'},dtabs:{overview:'סקירה',pillars:'פילרים',valuation:'שווי',tipranks:'TipRanks'},cols:{rank:'#',ticker:'טיקר',company:'חברה',sector:'סקטור',composite:'ציון קומפוזיט',valuation:'שווי',smartscore:'ציון חכם',consensus:'קונצנזוס',pe:'P/E',fwd_pe:'P/E עתידי',peg:'PEG',ps:'P/S',pb:'P/B',ev_ebitda:'EV/EBITDA',fcf_yield:'תשואת FCF %',pt_upside:'יעד מחיר %',div_yield:'תשואת דיב. %',pillar_prof:'פילר',roe:'ROE %',roa:'ROA %',roic:'ROIC %',net_margin:'מרג׳ין נטו %',gross_margin:'מרג׳ין גולמי %',op_margin:'מרג׳ין תפעולי %',eq_score:'איכות רווח',piotroski_f:'Piotroski F',pillar_growth:'פילר',rev_growth:'צמיחת הכנסות %',eps_growth:'צמיחת EPS %',fcf_margin:'מרג׳ין FCF %',tr_asset_gr:'צמיחת נכסים %',pillar_fcf:'פילר FCF',fcf_to_ni:'FCF/רווח',payout_ratio:'יחס חלוקה %',pillar_health:'פילר בריאות',current_ratio:'יחס שוטף',debt_equity:'חוב/הון',altman_z:'Altman Z',beta:'בטא',pillar_mom:'פילר מומנטום',perf_12m:'12M %',perf_6m:'6M %',perf_3m:'3M %',perf_1m:'1M %',momentum:'מומנטום משוקלל',tr_mom_12m:'מומנטום TR',pillar_analyst:'פילר אנליסטים',analyst_mean:'דירוג Yahoo',analysts:'מס׳ אנליסטים',tr_consensus:'קונצנזוס TR',tr_pt_upside:'יעד TR %',tr_smartscore:'ציון חכם',tr_news_bull:'חדשות חיוביות %',tr_blogger_bull:'בלוגרים חיוביים %',tr_insider:'מסחר פנים',tr_hedge:'קרנות גידור',tr_inv_chg_30d:'מוסדי 30י %',tr_inv_chg_7d:'מוסדי 7י %',breakout_score:'ציון פריצה',breakout_rank:'דירוג סקאנר',breakout_phase:'פאזה',breakout_rr:'סיכוי/סיכון',breakout_rs:'חוזק יחסי',breakout_stop:'סטופ לוס',has_vcp:'דפוס VCP',vcp_quality:'איכות VCP',breakout_entry:'איכות כניסה',vs_sector:'מול סקטור',coverage:'כיסוי נתונים %',p_profitability:'רווחיות',p_growth:'צמיחה',p_eq:'איכות רווח',p_fcf:'FCF',p_health:'בריאות',p_momentum:'מומנטום',p_analyst:'אנליסטים',p_piotroski:'Piotroski'},tips:{composite:'ממוצע משוקלל של 9 פילרים (10–100). גבוה יותר = איכות וערך כוללים טובים יותר.',valuation:'עד כמה המניה זולה ביחס לעמיתי הסקטור. 100 = זולה מאוד.',smartscore:'ציון חכם של TipRanks 1–10: אגרגציה של אנליסטים, חדשות, מסחר פנים וקרנות גידור.',pe:'מחיר / רווח (12 חודשים אחרונים). נמוך יותר = פוטנציאלית זול יותר.',fwd_pe:'P/E עתידי לפי תחזית EPS לשנה הבאה.',peg:'יחס PEG = P/E חלקי צמיחת EPS. מתחת ל-1 = פוטנציאלית זול ביחס לצמיחה.',ps:'מחיר / מכירות. שימושי לחברות צמיחה עם רווחים נמוכים.',pb:'מחיר / ערך ספרים. מתחת ל-1 = נסחר מתחת לשווי הנכסים.',ev_ebitda:'EV/EBITDA - מדד מרכזי להשוואת חברות ללא תלות במבנה ההון.',fcf_yield:'תזרים מזומנים חופשי / שווי שוק. גבוה יותר = יותר מזומן לכל שקל השקעה.',pt_upside:'יעד מחיר אנליסטים לעומת המחיר הנוכחי. % פוטנציאל עלייה.',div_yield:'דיבידנד שנתי / מחיר המניה. תשואת הכנסה על ההשקעה.',pillar_prof:'פילר רווחיות (0–100): ROE, ROA, ROIC, מרג'ינים שונים.',p_profitability:'פילר רווחיות (0–100): ROE, ROA, ROIC, מרג'ינים שונים.',roe:'תשואה על ההון: רווח נקי / הון עצמי.',roa:'תשואה על הנכסים: רווח נקי / סך נכסים.',roic:'תשואה על ההון המושקע: NOPAT / (הון + חוב - מזומן).',net_margin:'רווח נקי / הכנסות. % מכל שקל הכנסות שנהפך לרווח.',gross_margin:'רווח גולמי / הכנסות. יעילות הייצור הבסיסית.',op_margin:'רווח תפעולי / הכנסות. יעילות לפני ריבית ומסים.',eq_score:'ציון איכות רווחים: מודד עד כמה הרווחים המדווחים מגובים במזומן אמיתי.',piotroski_f:'Piotroski F-Score (0–9): 9 אינדיקטורים בינאריים לבריאות פיננסית. ≥7 = חזק, ≤2 = חלש.',pillar_growth:'פילר צמיחה (0–100): צמיחת הכנסות, EPS, FCF ונכסים.',p_growth:'פילר צמיחה (0–100): צמיחת הכנסות, EPS, FCF ונכסים.',rev_growth:'צמיחת הכנסות שנה על שנה.',eps_growth:'צמיחת EPS (רווח למניה) שנה על שנה.',fcf_margin:'FCF / הכנסות. % מההכנסות שמומר לתזרים חופשי.',tr_asset_gr:'קצב צמיחת נכסים. צמיחה מהירה מדי עלולה לדלל תשואות.',pillar_fcf:'פילר FCF (0–100): תשואת FCF, מרג'ין FCF, יחס המרה ויציבות דיבידנד.',p_fcf:'פילר FCF (0–100): תשואת FCF, מרג'ין FCF, יחס המרה ויציבות דיבידנד.',fcf_to_ni:'FCF / רווח נקי. > 1 = רווחים מגובים במזומן. < 0.5 = איכות רווחים נמוכה.',payout_ratio:'דיבידנדים / רווחים. גבוה מדי = פחות השקעה חוזרת בעסק.',pillar_health:'פילר מאזן (0–100): יחס שוטף, חוב/הון, Altman Z-Score.',p_health:'פילר מאזן (0–100): יחס שוטף, חוב/הון, Altman Z-Score.',current_ratio:'נכסים שוטפים / התחייבויות שוטפות. > 1.5 = נזילות בריאה לטווח קצר.',debt_equity:'חוב כולל / הון עצמי. גבוה יותר = ממונף יותר. תלוי בענף.',altman_z:'Altman Z-Score: > 3 = בטוח, 1.8–3 = אזור אפור, < 1.8 = מצוקה פיננסית.',beta:'תנודתיות ביחס ל-S&P 500. > 1 = תנועות מוגברות (יותר סיכון ותשואה).',pillar_mom:'פילר מומנטום (0–100): תשואות 12/6/3/1 חודשים לעומת עמיתי הסקטור.',p_momentum:'פילר מומנטום (0–100): תשואות 12/6/3/1 חודשים לעומת עמיתי הסקטור.',perf_12m:'תשואת מחיר ל-12 חודשים. הגורם המנבא החזק ביותר בהשקעת מומנטום.',perf_6m:'תשואת מחיר ל-6 חודשים.',perf_3m:'תשואת מחיר ל-3 חודשים.',perf_1m:'תשואת מחיר ל-1 חודש.',momentum:'מומנטום משוקלל: ממוצע של תשואות 12M/6M/3M/1M.',tr_mom_12m:'ציון מומנטום טכני של TipRanks (12 חודשים).',pillar_analyst:'פילר אנליסטים (0–100): דירוג, מספר אנליסטים, יעד מחיר, קונצנזוס TR.',p_analyst:'פילר אנליסטים (0–100): דירוג, מספר אנליסטים, יעד מחיר, קונצנזוס TR.',analyst_mean:'דירוג ממוצע Yahoo Finance. 1=קנייה חזקה, 3=החזקה, 5=מכירה חזקה.',analysts:'מספר אנליסטים של וול סטריט המכסים מניה זו.',tr_consensus:'קונצנזוס TipRanks: Strong Buy / Buy / Hold / Sell.',tr_pt_upside:'יעד מחיר TipRanks - % עלייה פוטנציאלית מהמחיר הנוכחי.',tr_smartscore:'SmartScore של TipRanks 1–10: ציון AI המשלב אנליסטים, חדשות ומוסדיים.',tr_news_bull:'% כתבות חדשות אחרונות עם סנטימנט חיובי.',tr_blogger_bull:'% בלוגרים פיננסיים עם תחזית חיובית.',tr_insider:'כיוון מסחר פנים: חיובי = קנייה, שלילי = מכירה.',tr_hedge:'מגמת פעילות קרנות גידור.',tr_inv_chg_30d:'שינוי בהחזקות משקיעים מוסדיים ב-30 ימים.',tr_inv_chg_7d:'שינוי בהחזקות משקיעים מוסדיים ב-7 ימים.',breakout_score:'ציון פריצה (0–110): ציון Trend Template של מינרביני. מודד חוזק Stage 2, מומנטום RS ופנדמנטלס.',breakout_rank:'דירוג בין כל מועמדי הפריצה בסריקה.',breakout_phase:'שלב שוק: 1=בסיס, 2=עלייה (זון קנייה), 3=חלוקה (זון מכירה), 4=ירידה.',breakout_rr:'יחס סיכוי/סיכון. מינימום 2:1 נדרש להכללה. גבוה יותר = סטאפ טוב יותר.',breakout_rs:'חוזק יחסי מול SPY (שיפוע 63 יום). > 1 = מוביל את השוק.',breakout_stop:'מחיר סטופ לוס מחושב (ATR או שפל תנופה). הסיכון מוגבל למקסימום 10%.',has_vcp:'VCP = Volatility Contraction Pattern (מינרביני). סדרת התכווצויות מהדקות = צבירה מוסדית.',vcp_quality:'ציון איכות VCP (0–100). גבוה יותר = התכווצויות הדוקות יותר, סטאפ טוב יותר.',breakout_entry:'הערכת איכות הכניסה: Ideal / Good / OK.',p_eq:'פילר איכות רווחים (0–100): מודד אמינות ויציבות הרווחים המדווחים.',p_piotroski:'פילר Piotroski (0–100): מבוסס על ציון בריאות פיננסית מ-9 נקודות.',vs_sector:'ציון קומפוזיט פחות החציון של הסקטור. חיובי = מוביל את העמיתים.',coverage:'שלמות נתונים: % ממדדי הליבה הזמינים ממקורות הנתונים.'}},detailLabels:{Price:'מחיר',MktCap:'שווי שוק',AltmanZ:'Altman Z',PiotroskiF:'Piotroski F',DivYield:'תשואת דיב.',vsSector:'מול סקטור',Beta:'בטא',Analysts:'אנליסטים',SmartScore:'ציון חכם',Consensus:'קונצנזוס TR',TRUpside:'יעד TR',Coverage:'כיסוי'},sectors:{'Information Technology':'טכנולוגיה','Health Care':'בריאות','Financials':'פיננסים','Consumer Discretionary':'צריכה מחזורית','Communication Services':'תקשורת','Industrials':'תעשייה','Consumer Staples':'צריכה בסיסית','Energy':'אנרגיה','Real Estate':'נדל"ן','Materials':'חומרים','Utilities':'תשתיות'},pillarNames:{VALUATION:'שווי',PROFITAB:'רווחיות',GROWTH:'צמיחה',EQ_QUAL:'איכות רווח',FCF:'FCF',HEALTH:'בריאות',MOMENTUM:'מומנטום',ANALYST:'אנליסטים',PIOTROSKI:'Piotroski'}}};
 
-def fetch_tipranks(tickers: list) -> pd.DataFrame:
-    results = {}
-    _TR_COLS = list(_parse_tipranks({}).keys())
-    chunks = [tickers[i:i + CFG["batch_size_tr"]]
-              for i in range(0, len(tickers), CFG["batch_size_tr"])]
+let lang='en';
+function setLang(l){lang=l;document.body.classList.toggle('rtl',l==='he');document.getElementById('btnEn').classList.toggle('active',l==='en');document.getElementById('btnHe').classList.toggle('active',l==='he');applyI18n();if(allData.length)renderTable();}
+function tl(k){return(T[lang]||T.en)[k]||(T.en)[k]||k;}
+function tc(k){return((T[lang]||T.en).cols||T.en.cols)[k]||(T.en.cols)[k]||k;}
+function tt(k){return((T[lang]||T.en).tips||T.en.tips)[k]||(T.en.tips)[k]||'';}
+function ttab(k){return((T[lang]||T.en).tabs||T.en.tabs)[k]||(T.en.tabs)[k]||k;}
+function tdtab(k){return((T[lang]||T.en).dtabs||T.en.dtabs)[k]||(T.en.dtabs)[k]||k;}
+function tpillar(k){return((T[lang]||T.en).pillarNames||T.en.pillarNames)[k]||(T.en.pillarNames)[k]||k;}
+function applyI18n(){const ids={'lbl-ranked':'ranked','lbl-avg':'avg','lbl-topsec':'topsec','lbl-ss8':'ss8','lbl-tr':'tr','lbl-stocks':'stocks','lbl-f-composite':'fcomposite','lbl-f-ss':'fss','lbl-f-consensus':'fconsensus','lbl-f-pe':'fpe','lbl-f-perf':'fperf','lbl-f-valuation':'fval','lbl-f-reset':'reset','lbl-filters':'filters','loadingText':'loading'};Object.entries(ids).forEach(([id,key])=>{const el=document.getElementById(id);if(el)el.textContent=tl(key);});document.getElementById('search').placeholder=tl('searchph');buildSectorBtns();buildViewTabs();if(allData.length)updateTopSector();}
 
-    for chunk in tqdm(chunks, desc="TipRanks"):
-        try:
-            resp = requests.get(TR_URL,
-                                params={"tickers": ",".join(chunk)},
-                                headers=TR_HEADERS, timeout=15)
-            if resp.status_code == 200:
-                for item in resp.json():
-                    t = item.get("ticker", "")
-                    if t:
-                        results[t] = _parse_tipranks(item)
-            else:
-                print(f"  ⚠️  TipRanks HTTP {resp.status_code}")
-        except Exception as e:
-            print(f"  ⚠️  TipRanks error: {e}")
-        time.sleep(CFG["sleep_tr"])
+const SECTOR_COLORS={'Information Technology':{bg:'#0d2137',color:'#4fc3f7'},'Health Care':{bg:'#0d2118',color:'#69f0ae'},'Financials':{bg:'#1a1a0d',color:'#fff176'},'Consumer Discretionary':{bg:'#1a100d',color:'#ffab91'},'Communication Services':{bg:'#150d1a',color:'#ce93d8'},'Industrials':{bg:'#0d1a1a',color:'#80deea'},'Consumer Staples':{bg:'#1a160d',color:'#ffcc80'},'Energy':{bg:'#1a0d0d',color:'#ef9a9a'},'Real Estate':{bg:'#0d1a13',color:'#a5d6a7'},'Materials':{bg:'#0d1318',color:'#90caf9'},'Utilities':{bg:'#120d1a',color:'#b39ddb'}};
 
-    if not results:
-        print("  ⚠️  TipRanks returned no data — all TR columns will be NaN.")
-        return pd.DataFrame(columns=["ticker"] + _TR_COLS)
+function buildViews(){return{
+score:[{key:'composite',lk:'composite',tk:'composite',fmt:scoreBar},{key:'valuation',lk:'valuation',tk:'valuation',fmt:v=>n(v,1),cls:valCls},{key:'p_profitability',lk:'p_profitability',tk:'composite',fmt:v=>n(v,1),cls:scoreCls},{key:'p_growth',lk:'p_growth',tk:'p_growth',fmt:v=>n(v,1),cls:scoreCls},{key:'p_fcf',lk:'p_fcf',tk:'p_fcf',fmt:v=>n(v,1),cls:scoreCls},{key:'p_health',lk:'p_health',tk:'p_health',fmt:v=>n(v,1),cls:scoreCls},{key:'p_momentum',lk:'p_momentum',tk:'p_momentum',fmt:v=>n(v,1),cls:scoreCls},{key:'p_analyst',lk:'p_analyst',tk:'p_analyst',fmt:v=>n(v,1),cls:scoreCls},{key:'p_piotroski',lk:'p_piotroski',tk:'p_piotroski',fmt:v=>n(v,1),cls:scoreCls},{key:'p_eq',lk:'p_eq',tk:'p_eq',fmt:v=>n(v,1),cls:scoreCls},{key:'tr_smartscore',lk:'smartscore',tk:'smartscore',fmt:ssBadge},{key:'coverage',lk:'coverage',tk:'coverage',fmt:v=>n(v,0,'%'),cls:'neutral'},{key:'vs_sector',lk:'vs_sector',tk:'vs_sector',fmt:v=>n(v,1),cls:signCls}],
+valuation:[{key:'valuation',lk:'valuation',tk:'valuation',fmt:v=>n(v,1),cls:valCls},{key:'pe',lk:'pe',tk:'pe',fmt:v=>n(v,1),cls:'neutral'},{key:'fwd_pe',lk:'fwd_pe',tk:'fwd_pe',fmt:v=>n(v,1),cls:'neutral'},{key:'peg',lk:'peg',tk:'peg',fmt:v=>n(v,2),cls:'neutral'},{key:'ps',lk:'ps',tk:'ps',fmt:v=>n(v,2),cls:'neutral'},{key:'pb',lk:'pb',tk:'pb',fmt:v=>n(v,2),cls:'neutral'},{key:'ev_ebitda',lk:'ev_ebitda',tk:'ev_ebitda',fmt:v=>n(v,1),cls:'neutral'},{key:'fcf_yield',lk:'fcf_yield',tk:'fcf_yield',fmt:v=>n(v,1,'%'),cls:signCls},{key:'pt_upside',lk:'pt_upside',tk:'pt_upside',fmt:v=>n(v,1,'%'),cls:signCls},{key:'div_yield',lk:'div_yield',tk:'div_yield',fmt:v=>n(v,2,'%'),cls:'neutral'}],
+profitability:[{key:'p_profitability',lk:'pillar_prof',tk:'p_profitability',fmt:v=>n(v,1),cls:scoreCls},{key:'roe',lk:'roe',tk:'roe',fmt:v=>n(v,1,'%'),cls:pctDistCls('roe')},{key:'roa',lk:'roa',tk:'roa',fmt:v=>n(v,1,'%'),cls:pctDistCls('roa')},{key:'roic',lk:'roic',tk:'roic',fmt:v=>n(v,1,'%'),cls:pctDistCls('roic')},{key:'net_margin',lk:'net_margin',tk:'net_margin',fmt:v=>n(v,1,'%'),cls:pctDistCls('net_margin')},{key:'gross_margin',lk:'gross_margin',tk:'gross_margin',fmt:v=>n(v,1,'%'),cls:pctDistCls('gross_margin')},{key:'op_margin',lk:'op_margin',tk:'op_margin',fmt:v=>n(v,1,'%'),cls:pctDistCls('op_margin')},{key:'eq_score',lk:'eq_score',tk:'eq_score',fmt:v=>n(v,1),cls:'neutral'},{key:'piotroski_f',lk:'piotroski_f',tk:'piotroski_f',fmt:v=>n(v,0),cls:'neutral'}],
+growth:[{key:'p_growth',lk:'pillar_growth',tk:'p_growth',fmt:v=>n(v,1),cls:scoreCls},{key:'rev_growth',lk:'rev_growth',tk:'rev_growth',fmt:v=>n(v,1,'%'),cls:pctDistCls('rev_growth')},{key:'eps_growth',lk:'eps_growth',tk:'eps_growth',fmt:v=>n(v,1,'%'),cls:pctDistCls('eps_growth')},{key:'fcf_margin',lk:'fcf_margin',tk:'fcf_margin',fmt:v=>n(v,1,'%'),cls:pctDistCls('fcf_margin')},{key:'tr_asset_gr',lk:'tr_asset_gr',tk:'tr_asset_gr',fmt:v=>n(v,1,'%'),cls:pctDistCls('tr_asset_gr')}],
+cashflow:[{key:'p_fcf',lk:'pillar_fcf',tk:'p_fcf',fmt:v=>n(v,1),cls:scoreCls},{key:'fcf_yield',lk:'fcf_yield',tk:'fcf_yield',fmt:v=>n(v,1,'%'),cls:signCls},{key:'fcf_margin',lk:'fcf_margin',tk:'fcf_margin',fmt:v=>n(v,1,'%'),cls:signCls},{key:'fcf_to_ni',lk:'fcf_to_ni',tk:'fcf_to_ni',fmt:v=>n(v,2),cls:'neutral'},{key:'div_yield',lk:'div_yield',tk:'div_yield',fmt:v=>n(v,2,'%'),cls:'neutral'},{key:'payout_ratio',lk:'payout_ratio',tk:'payout_ratio',fmt:v=>n(v,1,'%'),cls:'neutral'}],
+health:[{key:'p_health',lk:'pillar_health',tk:'p_health',fmt:v=>n(v,1),cls:scoreCls},{key:'current_ratio',lk:'current_ratio',tk:'current_ratio',fmt:v=>n(v,2),cls:'neutral'},{key:'debt_equity',lk:'debt_equity',tk:'debt_equity',fmt:v=>n(v,2),cls:'neutral'},{key:'altman_z',lk:'altman_z',tk:'altman_z',fmt:v=>n(v,2),cls:altmanCls},{key:'piotroski_f',lk:'piotroski_f',tk:'piotroski_f',fmt:v=>n(v,0),cls:'neutral'},{key:'beta',lk:'beta',tk:'beta',fmt:v=>n(v,2),cls:'neutral'}],
+momentum:[{key:'p_momentum',lk:'pillar_mom',tk:'p_momentum',fmt:v=>n(v,1),cls:scoreCls},{key:'perf_12m',lk:'perf_12m',tk:'perf_12m',fmt:v=>n(v,1,'%'),cls:pctDistCls('perf_12m')},{key:'perf_6m',lk:'perf_6m',tk:'perf_6m',fmt:v=>n(v,1,'%'),cls:pctDistCls('perf_6m')},{key:'perf_3m',lk:'perf_3m',tk:'perf_3m',fmt:v=>n(v,1,'%'),cls:pctDistCls('perf_3m')},{key:'perf_1m',lk:'perf_1m',tk:'perf_1m',fmt:v=>n(v,1,'%'),cls:signCls},{key:'momentum',lk:'momentum',tk:'momentum',fmt:v=>n(v,1,'%'),cls:pctDistCls('momentum')},{key:'beta',lk:'beta',tk:'beta',fmt:v=>n(v,2),cls:'neutral'},{key:'tr_mom_12m',lk:'tr_mom_12m',tk:'tr_mom_12m',fmt:v=>n(v,1,'%'),cls:signCls}],
+analyst:[{key:'p_analyst',lk:'pillar_analyst',tk:'p_analyst',fmt:v=>n(v,1),cls:scoreCls},{key:'analyst_mean',lk:'analyst_mean',tk:'analyst_mean',fmt:v=>n(v,2),cls:'neutral'},{key:'analysts',lk:'analysts',tk:'analysts',fmt:v=>n(v,0),cls:'neutral'},{key:'pt_upside',lk:'pt_upside',tk:'pt_upside',fmt:v=>n(v,1,'%'),cls:signCls},{key:'tr_consensus',lk:'tr_consensus',tk:'consensus',fmt:consensusFmt},{key:'tr_pt_upside',lk:'tr_pt_upside',tk:'tr_pt_upside',fmt:v=>n(v,1,'%'),cls:signCls}],
+breakout:[{key:'breakout_score',lk:'breakout_score',tk:'breakout_score',fmt:breakoutScoreBadge},{key:'breakout_rank',lk:'breakout_rank',tk:'breakout_rank',fmt:v=>n(v,0),cls:'neutral'},{key:'breakout_phase',lk:'breakout_phase',tk:'breakout_phase',fmt:phaseBadge},{key:'breakout_rr',lk:'breakout_rr',tk:'breakout_rr',fmt:v=>n(v,1,'x'),cls:'neutral'},{key:'breakout_rs',lk:'breakout_rs',tk:'breakout_rs',fmt:v=>n(v,3),cls:rsCls},{key:'breakout_stop',lk:'breakout_stop',tk:'breakout_stop',fmt:v=>valid(v)?'$'+parseFloat(v).toFixed(2):'—',cls:'neutral'},{key:'has_vcp',lk:'has_vcp',tk:'has_vcp',fmt:v=>v?'<span style="color:var(--gold);font-weight:700">✦ VCP</span>':'—'},{key:'vcp_quality',lk:'vcp_quality',tk:'vcp_quality',fmt:v=>n(v,0),cls:'neutral'},{key:'breakout_entry',lk:'breakout_entry',tk:'breakout_entry',fmt:v=>v||'—'}],
+tipranks:[{key:'tr_smartscore',lk:'tr_smartscore',tk:'smartscore',fmt:ssBadge},{key:'tr_consensus',lk:'tr_consensus',tk:'consensus',fmt:consensusFmt},{key:'tr_pt_upside',lk:'tr_pt_upside',tk:'tr_pt_upside',fmt:v=>n(v,1,'%'),cls:signCls},{key:'tr_news_bull',lk:'tr_news_bull',tk:'tr_news_bull',fmt:v=>n(v,0,'%'),cls:'neutral'},{key:'tr_blogger_bull',lk:'tr_blogger_bull',tk:'tr_blogger_bull',fmt:v=>n(v,0,'%'),cls:'neutral'},{key:'tr_insider',lk:'tr_insider',tk:'tr_insider',fmt:v=>v||'—'},{key:'tr_hedge',lk:'tr_hedge',tk:'tr_hedge',fmt:v=>v||'—'},{key:'tr_inv_chg_30d',lk:'tr_inv_chg_30d',tk:'tr_inv_chg_30d',fmt:v=>n(v,1,'%'),cls:signCls},{key:'tr_inv_chg_7d',lk:'tr_inv_chg_7d',tk:'tr_inv_chg_7d',fmt:v=>n(v,1,'%'),cls:signCls}],
+};}
 
-    tr_df = pd.DataFrame.from_dict(results, orient="index")
-    tr_df.index.name = "ticker"
-    tr_df = tr_df.reset_index()
-    for col in _TR_COLS:
-        if col not in tr_df.columns:
-            tr_df[col] = np.nan
-    print(f"  ✅  TipRanks: {tr_df['tr_smart_score'].notna().sum()}/{len(tickers)} SmartScores")
-    return tr_df
+function breakoutScoreBadge(v){if(!valid(v))return'<span style="color:var(--text4)">—</span>';const f=parseFloat(v);const c=f>=100?'#ffd700':f>=90?'var(--teal)':f>=75?'var(--gold)':'var(--text2)';return`<span style="color:${c};font-family:var(--mono);font-weight:800;font-size:13px">${f.toFixed(1)}</span>`;}
+function phaseBadge(v){if(!valid(v))return'<span style="color:var(--text4)">—</span>';const colors={1:'#ffd600',2:'var(--teal)',3:'var(--orange)',4:'var(--red)'};const labels={1:'Base',2:'Uptrend',3:'Top',4:'Down'};return`<span style="color:${colors[v]||'var(--text2)'};font-weight:700">P${v} <span style="font-size:10px;opacity:.7">${labels[v]||''}</span></span>`;}
+function rsCls(v){if(!valid(v))return'neutral';return parseFloat(v)>=1?'pos':parseFloat(v)>=0.9?'mid':'neg';}
+function n(v,dec=1,suf=''){if(v===null||v===undefined||isNaN(Number(v)))return'<span style="color:var(--text4)">—</span>';return parseFloat(v).toFixed(dec)+suf;}
+function valid(v){return v!==null&&v!==undefined&&!isNaN(Number(v))&&v!=='';}
+function signCls(v){if(!valid(v))return'neutral';return parseFloat(v)>0?'pos':parseFloat(v)<0?'neg':'neutral';}
+function scoreCls(v){if(!valid(v))return'neutral';return parseFloat(v)>=65?'pos':parseFloat(v)>=40?'neutral':'neg';}
+function valCls(v){if(!valid(v))return'neutral';return parseFloat(v)>=60?'pos':parseFloat(v)<=30?'neg':'neutral';}
+function altmanCls(v){if(!valid(v))return'neutral';return parseFloat(v)>=3?'pos':parseFloat(v)>=1.8?'neutral':'neg';}
+let _fieldP={};
+function buildPercentiles(data){const keys=['roe','roa','roic','net_margin','gross_margin','op_margin','rev_growth','eps_growth','fcf_margin','tr_asset_gr','perf_12m','perf_6m','perf_3m','perf_1m','momentum'];keys.forEach(k=>{const vals=data.map(d=>d[k]).filter(v=>valid(v)).map(Number).sort((a,b)=>a-b);if(!vals.length){_fieldP[k]={p25:0,p50:0,p75:0};return;}const p=pct=>vals[Math.floor(pct*(vals.length-1))];_fieldP[k]={p25:p(.25),p50:p(.5),p75:p(.75)};});}
+function pctDistCls(field){return v=>{if(!valid(v))return'neutral';const p=_fieldP[field];if(!p)return signCls(v);const f=parseFloat(v);if(f>=p.p75)return'pos';if(f>=p.p50)return'hi';if(f>=p.p25)return'mid';return'neg';};}
+function scoreColor(v){if(!valid(v))return'var(--text4)';const f=parseFloat(v);if(f>=70)return'var(--teal)';if(f>=55)return'var(--gold)';if(f>=40)return'var(--orange)';return'var(--red)';}
+function pillarColor(v){if(!valid(v))return'var(--text4)';const f=parseFloat(v);if(f>=65)return'var(--teal)';if(f>=45)return'var(--gold)';return'var(--red)';}
+function ssColorFn(v){if(!v)return{bg:'#1e2e42',color:'var(--text3)'};if(v>=8)return{bg:'#0d3320',color:'#00e676'};if(v>=6)return{bg:'#1a2e0d',color:'#76ff03'};if(v>=4)return{bg:'#2e2400',color:'#ffd600'};return{bg:'#2e0d0d',color:'#ff5252'};}
+function scoreBar(v){const c=scoreColor(v);const num=valid(v)?parseFloat(v).toFixed(1):'—';return`<div class="score-cell"><span class="score-num" style="color:${c}">${num}</span><div class="score-bar-bg"><div class="score-bar-fill" style="width:${valid(v)?parseFloat(v):0}%;background:${c}"></div></div></div>`;}
+function ssBadge(v){const c=ssColorFn(v);return`<span class="ss-badge" style="background:${c.bg};color:${c.color}">${v||'—'}</span>`;}
+function consensusFmt(v){if(!v)return'<span style="color:var(--text4)">—</span>';const c=v==='StrongBuy'?'#00e676':v.includes('Buy')?'#69f0ae':v==='Hold'?'#ffd600':'#ff5252';return`<span style="color:${c};font-size:12px;font-weight:600">${v.replace('Moderate','Mod ').replace('Strong','Str. ')}</span>`;}
 
+let allData=[],currentSector='ALL',currentSearch='',currentView='score',sortCol='rank',sortAsc=true;
 
-# ════════════════════════════════════════════════════════════
-#  S&P 500 TICKERS  (3 fallback strategies)
-# ════════════════════════════════════════════════════════════
-WIKI_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-
-def get_sp500_tickers() -> pd.DataFrame:
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-
-    try:
-        resp = requests.get(url, headers=WIKI_HEADERS, timeout=15)
-        resp.raise_for_status()
-        soup  = BeautifulSoup(resp.text, "html.parser")
-        table = (soup.find("table", {"id": "constituents"})
-                 or soup.find("table", {"class": "wikitable"}))
-        if table is None:
-            raise ValueError("Table not found")
-        rows = []
-        for tr in table.find_all("tr")[1:]:
-            cols = [td.get_text(strip=True) for td in tr.find_all("td")]
-            if len(cols) >= 4:
-                rows.append({"ticker":   cols[0].replace(".", "-"),
-                             "name":     cols[1],
-                             "sector":   cols[2],
-                             "industry": cols[3]})
-        if rows:
-            df = pd.DataFrame(rows)
-            print(f"✅  {len(df)} tickers (BeautifulSoup)")
-            return df
-    except Exception as e:
-        print(f"  ⚠️  Strategy 1 failed: {e}")
-
-    try:
-        tables = pd.read_html(url, attrs={"id": "constituents"}) or pd.read_html(url)
-        raw = tables[0]
-        raw.columns = [c.lower().replace(" ", "_") for c in raw.columns]
-        tc = next((c for c in raw.columns if "symbol" in c or "ticker" in c), raw.columns[0])
-        nc = next((c for c in raw.columns if "security" in c or "name"   in c), raw.columns[1])
-        sc = next((c for c in raw.columns if "sector"  in c),                    raw.columns[2])
-        ic = next((c for c in raw.columns if "industry" in c),                   raw.columns[3])
-        df = pd.DataFrame({
-            "ticker":   raw[tc].astype(str).str.replace(".", "-", regex=False),
-            "name":     raw[nc].astype(str),
-            "sector":   raw[sc].astype(str),
-            "industry": raw[ic].astype(str),
-        })
-        print(f"✅  {len(df)} tickers (read_html)")
-        return df
-    except Exception as e:
-        print(f"  ⚠️  Strategy 2 failed: {e}")
-
-    try:
-        raw = pd.read_csv(
-            "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/"
-            "main/data/constituents.csv")
-        raw.columns = [c.lower() for c in raw.columns]
-        df = pd.DataFrame({
-            "ticker":   raw["symbol"].str.replace(".", "-", regex=False),
-            "name":     raw.get("name",     raw.get("security",     "")),
-            "sector":   raw.get("sector",   "Unknown"),
-            "industry": raw.get("sub-industry", raw.get("industry", "Unknown")),
-        })
-        print(f"✅  {len(df)} tickers (GitHub CSV)")
-        return df
-    except Exception as e:
-        raise RuntimeError(f"All 3 ticker strategies failed: {e}")
-
-
-# ════════════════════════════════════════════════════════════
-#  YAHOO FINANCE  (parallel)
-# ════════════════════════════════════════════════════════════
-FUNDAMENTAL_FIELDS = [
-    "trailingPE", "forwardPE", "pegRatio", "priceToSalesTrailing12Months",
-    "priceToBook", "enterpriseToEbitda", "returnOnEquity", "returnOnAssets",
-    "profitMargins", "grossMargins", "operatingMargins",
-    "revenueGrowth", "earningsGrowth",
-    "currentRatio", "debtToEquity", "totalDebt", "totalCash",
-    "freeCashflow", "operatingCashflow", "totalRevenue", "netIncomeToCommon",
-    "ebitda", "totalAssets", "totalStockholdersEquity", "marketCap",
-    "enterpriseValue", "dividendYield", "payoutRatio",
-    "beta", "sharesOutstanding", "shortRatio",
-    "targetMeanPrice", "currentPrice", "52WeekChange",
-    "recommendationMean", "numberOfAnalystOpinions",
-    "workingCapital", "currentAssets", "currentLiabilities",
-    "earningsPerShare", "trailingEps", "revenuePerShare",
-    "averageVolume",
-]
-
-
-def _get_one(ticker: str) -> tuple:
-    try:
-        info = yf.Ticker(ticker).info
-        return ticker, {k: info.get(k) for k in FUNDAMENTAL_FIELDS}
-    except Exception:
-        return ticker, {}
-
-
-def fetch_yf_parallel(tickers: list) -> dict:
-    results = {}
-    with ThreadPoolExecutor(max_workers=CFG["max_workers_yf"]) as executor:
-        futures = {executor.submit(_get_one, t): t for t in tickers}
-        for future in tqdm(as_completed(futures), total=len(tickers),
-                           desc="Yahoo Finance (parallel)"):
-            t, info = future.result()
-            results[t] = info
-    return results   # always a dict, never None
-
-
-def fetch_price_multi(tickers: list) -> pd.DataFrame:
-    try:
-        raw = yf.download(tickers, period="2y", auto_adjust=True,
-                          progress=False, threads=True)["Close"]
-        if isinstance(raw, pd.Series):
-            raw = raw.to_frame(tickers[0])
-        return raw
-    except Exception:
-        return pd.DataFrame()
-
-
-def add_price_momentum(df: pd.DataFrame, tickers: list) -> pd.DataFrame:
-    prices = fetch_price_multi(tickers)
-    if prices.empty:
-        for col in ["perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite"]:
-            df[col] = np.nan
-        return df
-
-    def perf_window(n_days: int) -> dict:
-        out = {}
-        for col in prices.columns:
-            s = prices[col].dropna()
-            out[col] = s.iloc[-1] / s.iloc[-n_days] - 1 if len(s) >= n_days else np.nan
-        return out
-
-    p12, p6, p3, p1 = perf_window(252), perf_window(126), perf_window(63), perf_window(21)
-    df["perf_12m"] = df["ticker"].map(p12)
-    df["perf_6m"]  = df["ticker"].map(p6)
-    df["perf_3m"]  = df["ticker"].map(p3)
-    df["perf_1m"]  = df["ticker"].map(p1)
-    df["momentum_composite"] = (
-        0.50 * df["perf_12m"].fillna(0) + 0.30 * df["perf_6m"].fillna(0) +
-        0.15 * df["perf_3m"].fillna(0)  + 0.05 * df["perf_1m"].fillna(0)
-    )
-    all_nan = df[["perf_12m", "perf_6m", "perf_3m", "perf_1m"]].isna().all(axis=1)
-    df.loc[all_nan, "momentum_composite"] = np.nan
-
-    # Clip extreme outliers (splits, data errors)
-    for col in ["perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite"]:
-        df[col] = df[col].clip(-0.80, 5.0)
-    return df
-
-
-# ════════════════════════════════════════════════════════════
-#  COMPUTED METRICS
-# ════════════════════════════════════════════════════════════
-
-def _safe(val, default=np.nan):
-    if val is None:
-        return default
-    try:
-        f = float(val)
-        return default if np.isnan(f) else f
-    except Exception:
-        return default
-
-
-def _coverage(row: pd.Series, cols: list) -> float:
-    return sum(1 for c in cols if not pd.isna(row.get(c, np.nan))) / max(len(cols), 1)
-
-
-def compute_piotroski(row: pd.Series) -> float:
-    score = 0
-    try:
-        ta    = _safe(row.get("totalAssets"), 1)
-        roa   = _safe(row.get("returnOnAssets"))
-        op_cf = _safe(row.get("operatingCashflow"))
-        if roa > 0:                                          score += 1
-        if op_cf > 0:                                        score += 1
-        if (op_cf / ta) > 0:                                 score += 1
-        if _safe(row.get("debtToEquity"), 999) < 50:        score += 1
-        if _safe(row.get("currentRatio")) > 1:               score += 1
-        if _safe(row.get("grossMargins")) > 0.20:            score += 1
-        if (_safe(row.get("totalRevenue"), 0) / ta) > 0.50: score += 1
-        if _safe(row.get("revenueGrowth")) > 0:              score += 1
-    except Exception:
-        pass
-    return score
-
-
-def compute_altman(row: pd.Series) -> float:
-    try:
-        ta  = _safe(row.get("totalAssets"), 1)
-        # workingCapital fallback: currentAssets - currentLiabilities
-        wc = _safe(row.get("workingCapital"))
-        if wc is None or (isinstance(wc, float) and np.isnan(wc)):
-            ca = _safe(row.get("currentAssets"))
-            cl = _safe(row.get("currentLiabilities"))
-            if ca is not None and cl is not None:
-                wc = ca - cl
-            else:
-                return np.nan
-        re_ = _safe(row.get("totalStockholdersEquity"))
-        eb  = _safe(row.get("ebitda"))
-        mv  = _safe(row.get("marketCap"))
-        td  = _safe(row.get("totalDebt"), 1)
-        rev = _safe(row.get("totalRevenue"))
-        if any(v is None for v in [re_, eb, mv, rev]):
-            return np.nan
-        return round(1.2*(wc/ta) + 1.4*(re_/ta) + 3.3*(eb/ta)
-                     + 0.6*(mv/td) + 1.0*(rev/ta), 3)
-    except Exception:
-        return np.nan
-
-
-def compute_roic(row: pd.Series) -> float:
-    try:
-        ebitda  = _safe(row.get("ebitda"))
-        equity  = _safe(row.get("totalStockholdersEquity"), 0)
-        debt    = _safe(row.get("totalDebt"), 0)
-        cash    = _safe(row.get("totalCash"), 0)
-        nopat   = ebitda * 0.82 * (1 - 0.21)
-        inv_cap = equity + debt - cash
-        return nopat / inv_cap if inv_cap > 1e6 else np.nan
-    except Exception:
-        return np.nan
-
-
-def compute_fcf_metrics(row: pd.Series) -> dict:
-    fcf = _safe(row.get("freeCashflow"))
-    rev = _safe(row.get("totalRevenue"))
-    ni  = _safe(row.get("netIncomeToCommon"))
-    mc  = _safe(row.get("marketCap"))
-    return {
-        "fcf_yield":  fcf / mc  if (fcf and mc  > 0) else np.nan,
-        "fcf_margin": fcf / rev if (fcf and rev > 0) else np.nan,
-        "fcf_to_ni":  fcf / ni  if (fcf and ni  > 0) else np.nan,
-    }
-
-
-def compute_earnings_quality(row: pd.Series) -> float:
-    score = 0
-    try:
-        ni   = _safe(row.get("netIncomeToCommon"))
-        fcf  = _safe(row.get("freeCashflow"))
-        ta   = _safe(row.get("totalAssets"), 1)
-        roic = _safe(row.get("roic"))
-        pm   = _safe(row.get("profitMargins"))
-        gm   = _safe(row.get("grossMargins"))
-        if not (np.isnan(ni) or np.isnan(fcf)):
-            accrual = (ni - fcf) / ta
-            if accrual < 0.03:   score += 2
-            elif accrual < 0.08: score += 1
-        if not np.isnan(roic):
-            if roic > 0.15:   score += 1.5
-            elif roic > 0.08: score += 0.5
-        if not np.isnan(pm) and pm > 0.18: score += 0.5
-        if not np.isnan(gm) and gm > 0.40: score += 0.5
-    except Exception:
-        pass
-    return min(score, 5)
-
-
-def compute_pt_upside(row: pd.Series) -> float:
-    t = _safe(row.get("targetMeanPrice"))
-    c = _safe(row.get("currentPrice"))
-    return (t / c - 1) if (t and c and c > 0) else np.nan
-
-
-def compute_tr_pt_upside(row: pd.Series) -> float:
-    t = _safe(row.get("tr_price_target"))
-    c = _safe(row.get("currentPrice"))
-    return (t / c - 1) if (t and c and c > 0) else np.nan
-
-
-# ════════════════════════════════════════════════════════════
-#  DYNAMIC SECTOR THRESHOLDS
-# ════════════════════════════════════════════════════════════
-
-GLOBAL_THRESHOLDS = {
-    "trailingPE":                   (8,    45),
-    "forwardPE":                    (8,    40),
-    "pegRatio":                     (0.4,   3.5),
-    "priceToSalesTrailing12Months": (0.6,   9),
-    "priceToBook":                  (0.6,  12),
-    "enterpriseToEbitda":           (5,    28),
-    "fcf_yield":                    (0.008, 0.09),
-    "pt_upside":                    (-0.12, 0.35),
-    "tr_pt_upside":                 (-0.12, 0.35),
+async function loadData(){
+  try{
+    const r=await fetch('sp500_data.json?v='+Date.now());
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const json=await r.json();
+    allData=json.data;
+    document.getElementById('lastUpdated').innerHTML=`<span class="live-dot"></span>${json.generated||''}`;
+    buildPercentiles(allData);
+    init();
+  }catch(e){
+    document.getElementById('loading').style.display='none';
+    document.getElementById('error-msg').style.display='block';
+    console.error('loadData error:',e);
+  }
 }
 
-_SECTOR_THRESHOLDS: dict = {}
+function updateTopSector(){const secMap={};allData.forEach(d=>{if(!secMap[d.sector])secMap[d.sector]=[];secMap[d.sector].push(d.composite||0);});const topSec=Object.entries(secMap).map(([s,v])=>[s,v.reduce((a,b)=>a+b,0)/v.length]).sort((a,b)=>b[1]-a[1])[0][0];const topMap=(T[lang]||T.en).topSectors||T.en.topSectors;document.getElementById('statTopSector').textContent=topMap[topSec]||topSec;}
 
-
-def build_sector_thresholds(df: pd.DataFrame) -> dict:
-    mult_cols = list(GLOBAL_THRESHOLDS.keys())
-    thresholds = {}
-    for col in mult_cols:
-        thresholds[col] = {}
-        for sector, grp in df.groupby("sector"):
-            vals = grp[col].dropna() if col in grp.columns else pd.Series(dtype=float)
-            if len(vals) < 5:
-                thresholds[col][sector] = GLOBAL_THRESHOLDS.get(col, (8, 40))
-                continue
-            med = vals.median()
-            std = vals.std()
-            thresholds[col][sector] = (
-                max(med - 1.5 * std, vals.quantile(0.10)),
-                min(med + 1.5 * std, vals.quantile(0.90)),
-            )
-    return thresholds
-
-
-# ════════════════════════════════════════════════════════════
-#  NORMALISATION
-# ════════════════════════════════════════════════════════════
-
-def sector_percentile(df: pd.DataFrame, col: str,
-                      higher_is_better: bool = True) -> pd.Series:
-    if col not in df.columns:
-        return pd.Series(np.nan, index=df.index)
-    result = pd.Series(np.nan, index=df.index, dtype=float)
-    for _, grp in df.groupby("sector"):
-        valid = grp[col].dropna()
-        if valid.empty:
-            continue
-        pct = grp[col].apply(
-            lambda x: percentileofscore(valid, x, kind="rank") / 100
-            if not pd.isna(x) else np.nan
-        )
-        if not higher_is_better:
-            pct = 1 - pct
-        result.loc[grp.index] = pct * 90 + 10
-    return result
-
-
-# ════════════════════════════════════════════════════════════
-#  PILLAR SCORES
-# ════════════════════════════════════════════════════════════
-
-def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
-    # 1. Valuation
-    df["s_pe"]        = sector_percentile(df, "trailingPE",                  False)
-    df["s_peg"]       = sector_percentile(df, "pegRatio",                    False)
-    df["s_ev_ebitda"] = sector_percentile(df, "enterpriseToEbitda",           False)
-    df["s_ps"]        = sector_percentile(df, "priceToSalesTrailing12Months", False)
-    df["s_pb"]        = sector_percentile(df, "priceToBook",                  False)
-    df["pillar_valuation"] = df[["s_pe","s_peg","s_ev_ebitda","s_ps","s_pb"]].mean(axis=1, skipna=True)
-
-    # 2. Profitability
-    df["s_roe"]    = sector_percentile(df, "returnOnEquity", True)
-    df["s_roa"]    = sector_percentile(df, "returnOnAssets", True)
-    df["s_roic"]   = sector_percentile(df, "roic",           True)
-    df["s_pm"]     = sector_percentile(df, "profitMargins",  True)
-    df["s_tr_roe"] = sector_percentile(df, "tr_roe",         True)
-    df["pillar_profitability"] = df[["s_roe","s_roa","s_roic","s_pm","s_tr_roe"]].mean(axis=1, skipna=True)
-
-    # 3. Growth
-    df["s_rev_g"]      = sector_percentile(df, "revenueGrowth",   True)
-    df["s_earn_g"]     = sector_percentile(df, "earningsGrowth",  True)
-    df["s_fcf_m"]      = sector_percentile(df, "fcf_margin",      True)
-    df["s_tr_asset_g"] = sector_percentile(df, "tr_asset_growth", True)
-    df["pillar_growth"] = df[["s_rev_g","s_earn_g","s_fcf_m","s_tr_asset_g"]].mean(axis=1, skipna=True)
-
-    # 4. Earnings Quality
-    df["s_eq"] = sector_percentile(df, "earnings_quality_score", True)
-    df["pillar_earnings_quality"] = df["s_eq"]
-
-    # 5. FCF Quality
-    df["s_fcf_yield"] = sector_percentile(df, "fcf_yield",  True)
-    df["s_fcf_ni"]    = sector_percentile(df, "fcf_to_ni",  True)
-    df["pillar_fcf"]  = df[["s_fcf_yield","s_fcf_ni","s_fcf_m"]].mean(axis=1, skipna=True)
-
-    # 6. Financial Health
-    df["s_cr"]     = sector_percentile(df, "currentRatio", True)
-    df["s_de"]     = sector_percentile(df, "debtToEquity", False)
-    df["s_altman"] = sector_percentile(df, "altman_z",     True)
-    df["pillar_health"] = df[["s_cr","s_de","s_altman"]].mean(axis=1, skipna=True)
-
-    # 7. Momentum
-    df["s_mom"]      = sector_percentile(df, "momentum_composite", True)
-    df["s_beta"]     = sector_percentile(df, "beta",               False)
-    df["s_tr_mom12"] = sector_percentile(df, "tr_momentum_12m",    True)
-    df["s_tr_sma"]   = sector_percentile(df, "tr_sma_num",         True)
-    df["pillar_momentum"] = df[["s_mom","s_beta","s_tr_mom12","s_tr_sma"]].mean(axis=1, skipna=True)
-
-    # 8. Analyst + TipRanks Sentiment
-    df["s_rec"]          = sector_percentile(df, "recommendationMean",   False)
-    df["s_pt_upside"]    = sector_percentile(df, "pt_upside",            True)
-    df["s_tr_smart"]     = sector_percentile(df, "tr_smart_score",       True)
-    df["s_tr_consensus"] = sector_percentile(df, "tr_consensus_num",     True)
-    df["s_tr_news"]      = sector_percentile(df, "tr_news_sent_num",     True)
-    df["s_tr_blogger"]   = sector_percentile(df, "tr_blogger_bullish",   True)
-    df["s_tr_hedge"]     = sector_percentile(df, "tr_hedge_trend_num",   True)
-    df["s_tr_insider"]   = sector_percentile(df, "tr_insider_trend_num", True)
-    df["s_tr_inv_chg"]   = sector_percentile(df, "tr_investor_chg_30d",  True)
-    df["s_tr_pt"]        = sector_percentile(df, "tr_pt_upside",         True)
-    df["pillar_analyst"] = df[[
-        "s_rec","s_pt_upside","s_tr_smart","s_tr_consensus","s_tr_news",
-        "s_tr_blogger","s_tr_hedge","s_tr_insider","s_tr_inv_chg","s_tr_pt",
-    ]].mean(axis=1, skipna=True)
-
-    # 9. Piotroski
-    df["s_piotroski"]      = sector_percentile(df, "piotroski_score", True)
-    df["pillar_piotroski"] = df["s_piotroski"]
-
-    return df
-
-
-# ════════════════════════════════════════════════════════════
-#  COMPOSITE SCORE
-# ════════════════════════════════════════════════════════════
-
-PILLAR_MAP = {
-    "valuation":        "pillar_valuation",
-    "profitability":    "pillar_profitability",
-    "growth":           "pillar_growth",
-    "earnings_quality": "pillar_earnings_quality",
-    "fcf_quality":      "pillar_fcf",
-    "financial_health": "pillar_health",
-    "momentum":         "pillar_momentum",
-    "analyst":          "pillar_analyst",
-    "piotroski":        "pillar_piotroski",
+function init(){
+  document.getElementById('loading').style.display='none';
+  document.getElementById('statsBar').style.display='grid';
+  document.getElementById('controls').style.display='flex';
+  document.getElementById('viewTabs').style.display='flex';
+  document.getElementById('tableWrap').style.display='block';
+  const nn=allData.length;
+  const avg=(allData.reduce((a,b)=>a+(b.composite||0),0)/nn).toFixed(1);
+  const ss8=allData.filter(d=>d.tr_smartscore>=8).length;
+  const trCov=allData.filter(d=>d.tr_smartscore).length;
+  document.getElementById('statTotal').textContent=nn;
+  document.getElementById('statAvg').textContent=avg;
+  document.getElementById('statSS8').textContent=ss8;
+  document.getElementById('statTR').textContent=Math.round(trCov/nn*100)+'%';
+  updateTopSector();buildSectorBtns();buildViewTabs();
+  document.getElementById('search').addEventListener('input',e=>{currentSearch=e.target.value.toLowerCase();renderTable();});
+  ['fCompMin','fCompMax','fSSMin','fConsensus','fPEMax','fPerfMin','fValMin'].forEach(id=>{const el=document.getElementById(id);if(el){el.addEventListener('change',renderTable);el.addEventListener('input',renderTable);}});
+  renderTable();
 }
 
+function buildSectorBtns(){
+  const sel=document.getElementById('sectorSelect');
+  const prev=sel.value||'ALL';
+  sel.innerHTML='';
+  const sMap=(T[lang]||T.en).sectors||T.en.sectors;
+  const allOpt=document.createElement('option');
+  allOpt.value='ALL';
+  allOpt.textContent=tl('allsectors');
+  sel.appendChild(allOpt);
+  Object.keys(SECTOR_COLORS).filter(s=>allData.some(d=>d.sector===s)).forEach(s=>{
+    const opt=document.createElement('option');
+    opt.value=s;
+    opt.textContent=lang==='he'?(sMap[s]||s):s;
+    sel.appendChild(opt);
+  });
+  sel.value=prev;
+}
+function onSectorChange(val){currentSector=val;renderTable();}
+function buildViewTabs(){const c=document.getElementById('viewTabs');c.innerHTML='';Object.keys(buildViews()).forEach(view=>{const btn=document.createElement('button');btn.className='view-tab'+(view===currentView?' active':'');btn.textContent=ttab(view);btn.dataset.view=view;btn.addEventListener('click',()=>{document.querySelectorAll('.view-tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');currentView=view;sortCol='rank';sortAsc=true;renderTable();});c.appendChild(btn);});}
+function toggleFilter(){const panel=document.getElementById('filterPanel'),btn=document.getElementById('filterToggle');const open=panel.classList.toggle('open');btn.classList.toggle('open',open);}
+function resetFilters(){['fCompMin','fCompMax','fSSMin','fConsensus','fPEMax','fPerfMin','fValMin'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});renderTable();}
+function getFilters(){return{compMin:parseFloat(document.getElementById('fCompMin').value)||null,compMax:parseFloat(document.getElementById('fCompMax').value)||null,ssMin:parseFloat(document.getElementById('fSSMin').value)||null,consensus:document.getElementById('fConsensus').value||null,peMax:parseFloat(document.getElementById('fPEMax').value)||null,perfMin:parseFloat(document.getElementById('fPerfMin').value)||null,valMin:parseFloat(document.getElementById('fValMin').value)||null};}
+function applyFilter(){let data=[...allData];const f=getFilters();if(currentSector!=='ALL')data=data.filter(d=>d.sector===currentSector);if(currentSearch)data=data.filter(d=>d.ticker.toLowerCase().includes(currentSearch)||(d.company||'').toLowerCase().includes(currentSearch));if(f.compMin!==null)data=data.filter(d=>(d.composite||0)>=f.compMin);if(f.compMax!==null)data=data.filter(d=>(d.composite||0)<=f.compMax);if(f.ssMin!==null)data=data.filter(d=>(d.tr_smartscore||0)>=f.ssMin);if(f.consensus)data=data.filter(d=>(d.tr_consensus||'')===f.consensus||(d.tr_consensus||'').includes(f.consensus.replace('Buy','').trim()));if(f.peMax!==null)data=data.filter(d=>valid(d.pe)&&parseFloat(d.pe)<=f.peMax);if(f.perfMin!==null)data=data.filter(d=>valid(d.perf_12m)&&parseFloat(d.perf_12m)>=f.perfMin);if(f.valMin!==null)data=data.filter(d=>(d.valuation||0)>=f.valMin);data.sort((a,b)=>{let av=a[sortCol],bv=b[sortCol];if(typeof av==='string')return sortAsc?(av||'').localeCompare(bv||''):(bv||'').localeCompare(av||'');if(!valid(av))return 1;if(!valid(bv))return-1;return sortAsc?parseFloat(av)-parseFloat(bv):parseFloat(bv)-parseFloat(av);});return data;}
 
-def compute_composite(row: pd.Series, weights: dict = None) -> float:
-    if weights is None:
-        weights = CFG["weights"]
-    total_w, score = 0.0, 0.0
-    for key, col in PILLAR_MAP.items():
-        val = row.get(col, np.nan)
-        if not pd.isna(val):
-            w = weights[key]
-            score   += w * val
-            total_w += w
-    return round(score / total_w, 2) if total_w > 0 else np.nan
-
-
-# ════════════════════════════════════════════════════════════
-#  VALUATION SCORE  1–100
-# ════════════════════════════════════════════════════════════
-
-def compute_valuation_score(row: pd.Series) -> float:
-    signals = []
-    sector  = row.get("sector", "__global__")
-
-    def add(col, invert=False):
-        raw = _safe(row.get(col))
-        if pd.isna(raw):
-            return
-        cheap_thr, exp_thr = (_SECTOR_THRESHOLDS.get(col, {})
-                               .get(sector, GLOBAL_THRESHOLDS.get(col, (0, 1))))
-        rng  = max(exp_thr - cheap_thr, 1e-9)
-        norm = (raw - cheap_thr) / rng if invert else (exp_thr - raw) / rng
-        signals.append(float(np.clip(norm, 0, 1)) * 99 + 1)
-
-    add("trailingPE")
-    add("forwardPE")
-    add("pegRatio")
-    add("priceToSalesTrailing12Months")
-    add("priceToBook")
-    add("enterpriseToEbitda")
-    add("fcf_yield", invert=True)
-    if not pd.isna(row.get("tr_pt_upside", np.nan)):
-        add("tr_pt_upside", invert=True)
-    else:
-        add("pt_upside", invert=True)
-
-    return round(float(np.clip(np.mean(signals), 1, 100)), 1) if signals else np.nan
-
-
-# ════════════════════════════════════════════════════════════
-#  COVERAGE + SECTOR CONTEXT
-# ════════════════════════════════════════════════════════════
-
-CORE_METRIC_COLS = [
-    "trailingPE", "returnOnEquity", "returnOnAssets", "profitMargins",
-    "revenueGrowth", "earningsGrowth", "currentRatio", "debtToEquity",
-    "freeCashflow", "altman_z", "piotroski_score", "beta",
-    "recommendationMean", "fcf_yield", "tr_smart_score",
-    "earnings_quality_score", "momentum_composite",
-]
-
-
-def compute_coverage(df: pd.DataFrame) -> pd.Series:
-    return df.apply(lambda r: _coverage(r, CORE_METRIC_COLS), axis=1)
-
-
-def add_sector_context(df: pd.DataFrame) -> pd.DataFrame:
-    pillar_cols = list(PILLAR_MAP.values())
-    sector_med  = (df.groupby("sector")[pillar_cols + ["composite_score"]]
-                   .median().add_prefix("sector_med_"))
-    df = df.merge(sector_med, on="sector", how="left")
-    df["vs_sector"] = df["composite_score"] - df["sector_med_composite_score"]
-    return df
-
-
-# ════════════════════════════════════════════════════════════
-#  CACHING
-# ════════════════════════════════════════════════════════════
-
-def load_cache() -> "pd.DataFrame | None":
-    global _SECTOR_THRESHOLDS
-    if not os.path.exists(CACHE_FILE):
-        return None
-    try:
-        with open(CACHE_FILE, "rb") as f:
-            payload = pickle.load(f)
-        if len(payload) == 3:
-            data, saved_thresholds, ts = payload
-            _SECTOR_THRESHOLDS = saved_thresholds
-        else:
-            data, ts = payload
-            _SECTOR_THRESHOLDS = build_sector_thresholds(data)
-            try:
-                with open(CACHE_FILE, "wb") as fw:
-                    pickle.dump((data, _SECTOR_THRESHOLDS, ts), fw)
-            except Exception:
-                pass
-        age = datetime.now() - ts
-        if age < timedelta(hours=CFG["cache_hours"]):
-            print(f"✅  Cache loaded ({int(age.total_seconds()//60)} min old)")
-            return data
-        print(f"  ℹ️  Cache expired ({int(age.total_seconds()//3600)}h old) — refreshing")
-    except Exception as e:
-        print(f"  ⚠️  Cache read error: {e}")
-    return None
-
-
-def save_cache(df: pd.DataFrame):
-    try:
-        with open(CACHE_FILE, "wb") as f:
-            pickle.dump((df, _SECTOR_THRESHOLDS, datetime.now()), f)
-        print(f"💾  Cache saved → {CACHE_FILE}")
-    except Exception as e:
-        print(f"  ⚠️  Cache save error: {e}")
-
-
-# ════════════════════════════════════════════════════════════
-#  EXCEL EXPORT
-# ════════════════════════════════════════════════════════════
-
-EXPORT_COLS = [
-    "rank", "ticker", "name", "sector", "industry",
-    "composite_score", "valuation_score",
-    "pillar_valuation", "pillar_profitability", "pillar_growth",
-    "pillar_earnings_quality", "pillar_fcf", "pillar_health",
-    "pillar_momentum", "pillar_analyst", "pillar_piotroski",
-    "coverage",
-    "tr_smart_score", "tr_analyst_consensus", "tr_consensus_num",
-    "tr_news_sentiment", "tr_news_bullish",
-    "tr_blogger_bullish", "tr_hedge_trend", "tr_hedge_trend_num",
-    "tr_insider_trend", "tr_insider_3m_usd",
-    "tr_investor_chg_30d", "tr_investor_chg_7d",
-    "tr_momentum_12m", "tr_sma",
-    "tr_price_target", "tr_pt_upside", "tr_roe", "tr_asset_growth",
-    "trailingPE", "forwardPE", "pegRatio",
-    "priceToSalesTrailing12Months", "priceToBook", "enterpriseToEbitda",
-    "returnOnEquity", "returnOnAssets", "roic",
-    "profitMargins", "grossMargins", "operatingMargins",
-    "revenueGrowth", "earningsGrowth",
-    "fcf_yield", "fcf_margin", "fcf_to_ni",
-    "earnings_quality_score",
-    "currentRatio", "debtToEquity",
-    "dividendYield", "payoutRatio", "beta",
-    "perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite",
-    "altman_z", "piotroski_score",
-    "recommendationMean", "numberOfAnalystOpinions", "pt_upside",
-    "marketCap", "enterpriseValue", "currentPrice", "averageVolume",
-    "vs_sector",
-]
-
-FRIENDLY_NAMES = {
-    "rank": "Rank", "ticker": "Ticker", "name": "Company",
-    "sector": "Sector", "industry": "Industry",
-    "composite_score":         "Composite Score",
-    "valuation_score":         "Cheap/Expensive (1-100)",
-    "pillar_valuation":        "Valuation",
-    "pillar_profitability":    "Profitability",
-    "pillar_growth":           "Growth",
-    "pillar_earnings_quality": "Earnings Quality",
-    "pillar_fcf":              "FCF Quality",
-    "pillar_health":           "Financial Health",
-    "pillar_momentum":         "Momentum",
-    "pillar_analyst":          "Analyst+Sentiment",
-    "pillar_piotroski":        "Piotroski",
-    "coverage":                "Data Coverage %",
-    "tr_smart_score":          "TR SmartScore",
-    "tr_analyst_consensus":    "TR Consensus Label",
-    "tr_consensus_num":        "TR Consensus (0-5)",
-    "tr_news_sentiment":       "TR News Sentiment",
-    "tr_news_bullish":         "TR News Bullish %",
-    "tr_blogger_bullish":      "TR Blogger Bullish %",
-    "tr_hedge_trend":          "TR Hedge Fund Trend",
-    "tr_hedge_trend_num":      "TR Hedge Num",
-    "tr_insider_trend":        "TR Insider Trend",
-    "tr_insider_3m_usd":       "TR Insider 3M ($)",
-    "tr_investor_chg_30d":     "TR Investor Chg 30D %",
-    "tr_investor_chg_7d":      "TR Investor Chg 7D %",
-    "tr_momentum_12m":         "TR Tech Mom 12M %",
-    "tr_sma":                  "TR SMA Signal",
-    "tr_price_target":         "TR Price Target ($)",
-    "tr_pt_upside":            "TR PT Upside %",
-    "tr_roe":                  "TR ROE %",
-    "tr_asset_growth":         "TR Asset Growth %",
-    "trailingPE":              "P/E (TTM)",
-    "forwardPE":               "Forward P/E",
-    "pegRatio":                "PEG",
-    "priceToSalesTrailing12Months": "P/S",
-    "priceToBook":             "P/B",
-    "enterpriseToEbitda":      "EV/EBITDA",
-    "returnOnEquity":          "ROE %",
-    "returnOnAssets":          "ROA %",
-    "roic":                    "ROIC %",
-    "profitMargins":           "Net Margin %",
-    "grossMargins":            "Gross Margin %",
-    "operatingMargins":        "Op. Margin %",
-    "revenueGrowth":           "Rev Growth %",
-    "earningsGrowth":          "EPS Growth %",
-    "fcf_yield":               "FCF Yield %",
-    "fcf_margin":              "FCF Margin %",
-    "fcf_to_ni":               "FCF/Net Income",
-    "earnings_quality_score":  "Earnings Quality (0-5)",
-    "currentRatio":            "Current Ratio",
-    "debtToEquity":            "Debt/Equity",
-    "dividendYield":           "Div Yield %",
-    "payoutRatio":             "Payout Ratio %",
-    "beta":                    "Beta",
-    "perf_12m":                "Perf 12M %",
-    "perf_6m":                 "Perf 6M %",
-    "perf_3m":                 "Perf 3M %",
-    "perf_1m":                 "Perf 1M %",
-    "momentum_composite":      "Momentum Composite %",
-    "altman_z":                "Altman Z",
-    "piotroski_score":         "Piotroski F",
-    "recommendationMean":      "Yahoo Analyst (1=Buy)",
-    "numberOfAnalystOpinions": "# Analysts",
-    "pt_upside":               "Yahoo PT Upside %",
-    "marketCap":               "Market Cap ($)",
-    "enterpriseValue":         "EV ($)",
-    "currentPrice":            "Price ($)",
-    "averageVolume":           "Avg Volume",
-    "vs_sector":               "vs Sector Median",
+function renderTable(){
+  const filtered=applyFilter();
+  document.getElementById('showCount').innerHTML=`<span>${filtered.length}</span>`;
+  const VIEWS=buildViews(),cols=VIEWS[currentView];
+  const thead=document.getElementById('tableHead');
+  const mkth=(lk,col,w,tkOv)=>{const sorted=sortCol===col?(' sorted'+(sortAsc?' asc':'')):'';return`<th class="${sorted} col-${w}" data-col="${col}"><div class="th-wrap">${tc(lk)}<span class="th-tip">${tt(tkOv||lk)}</span></div></th>`;};
+  let hRow='<tr>'+mkth('rank','rank','rank')+mkth('ticker','ticker','ticker')+mkth('company','company','company')+mkth('sector','sector','sector');
+  cols.forEach(c=>{const sorted=sortCol===c.key?(' sorted'+(sortAsc?' asc':'')):'';hRow+=`<th class="${sorted} col-data" data-col="${c.key}"><div class="th-wrap">${tc(c.lk)}<span class="th-tip">${tt(c.tk)}</span></div></th>`;});
+  hRow+='</tr>';thead.innerHTML=hRow;
+  thead.querySelectorAll('th[data-col]').forEach(th=>{
+    th.addEventListener('mouseenter',()=>{const tip=th.querySelector('.th-tip');if(!tip)return;const rect=th.getBoundingClientRect();tip.style.top=Math.max(8,rect.top-tip.offsetHeight-8)+'px';tip.style.left=Math.min(rect.left+rect.width/2-115,window.innerWidth-240)+'px';});
+    th.addEventListener('click',()=>{const col=th.dataset.col;if(sortCol===col)sortAsc=!sortAsc;else{sortCol=col;sortAsc=['rank','ticker','company','sector'].includes(col);}renderTable();});
+  });
+  const tbody=document.getElementById('tableBody');tbody.innerHTML='';
+  filtered.forEach(d=>{
+    const sc=SECTOR_COLORS[d.sector]||{bg:'#1a1a1a',color:'#999'};
+    const sMap=(T[lang]||T.en).sectors||T.en.sectors;
+    const sLabel=lang==='he'?(sMap[d.sector]||d.sector):(d.sector||'').replace('Information Technology','IT').replace('Communication Services','Comm').replace('Consumer Discretionary','Cons D').replace('Consumer Staples','Cons S').replace('Health Care','Health');
+    const isBreakout=valid(d.breakout_score);
+    const doubleSignal=isBreakout&&(d.composite||0)>=65;
+    const dsBadge = doubleSignal ? '<span class="ds-badge" title="Double Signal: Top breakout + High composite score">⚡ SIGNAL</span>' : '';
+    let cells=`<td class="td-rank ${d.rank<=3?'top3':''}">${d.rank}</td><td class="td-ticker"><a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank" onclick="event.stopPropagation()">${d.ticker}</a>${dsBadge}</td><td class="td-company" title="${d.company||''}">${(d.company||'').substring(0,24)}</td><td><span class="sector-pill" style="background:${sc.bg};color:${sc.color}">${sLabel}</span></td>`;
+    cols.forEach(c=>{const raw=d[c.key];const content=c.fmt?c.fmt(raw):(valid(raw)?raw:'—');const cls=c.cls?(typeof c.cls==='function'?c.cls(raw):c.cls):'';cells+=`<td class="td-num ${cls}">${content}</td>`;});
+    const tr=document.createElement('tr');
+    if(doubleSignal)tr.classList.add('double-signal-row');
+    tr.innerHTML=cells;
+    const detailRow=document.createElement('tr');detailRow.className='stock-detail-row';
+    detailRow.innerHTML=`<td colspan="99">${buildDetailPanel(d)}</td>`;
+    tr.addEventListener('click',()=>{const isOpen=detailRow.classList.contains('open');document.querySelectorAll('.stock-detail-row.open').forEach(r=>r.classList.remove('open'));document.querySelectorAll('tr.expanded').forEach(r=>r.classList.remove('expanded'));if(!isOpen){detailRow.classList.add('open');tr.classList.add('expanded');}});
+    tbody.appendChild(tr);tbody.appendChild(detailRow);
+  });
 }
 
-PCT_COLS_DECIMAL = {
-    "returnOnEquity", "returnOnAssets", "roic",
-    "profitMargins", "grossMargins", "operatingMargins",
-    "revenueGrowth", "earningsGrowth",
-    "fcf_yield", "fcf_margin",
-    "dividendYield", "payoutRatio",
-    "pt_upside", "coverage",
+function buildDetailPanel(d){
+  const sc=SECTOR_COLORS[d.sector]||{bg:'#1a1a1a',color:'#999'};
+  const sMap=(T[lang]||T.en).sectors||T.en.sectors;
+  const sLabel=lang==='he'?(sMap[d.sector]||d.sector):d.sector;
+  const ss=ssColorFn(d.tr_smartscore);
+  const DL=(T[lang]||T.en).detailLabels||T.en.detailLabels;
+  const pillarDefs=[['VALUATION',d.p_valuation],['PROFITAB',d.p_profitability],['GROWTH',d.p_growth],['EQ_QUAL',d.p_eq],['FCF',d.p_fcf],['HEALTH',d.p_health],['MOMENTUM',d.p_momentum],['ANALYST',d.p_analyst],['PIOTROSKI',d.p_piotroski]];
+  const pillarGrid=pillarDefs.map(([k,v])=>`<div class="pillar-card"><div class="pillar-card-name">${tpillar(k)}</div><div class="pillar-card-score" style="color:${pillarColor(v)}">${valid(v)?parseFloat(v).toFixed(0):'—'}</div><div class="pillar-bar-bg"><div class="pillar-bar-fill" style="width:${valid(v)?parseFloat(v):0}%;background:${pillarColor(v)}"></div></div></div>`).join('');
+  const mf=(label,val,cls='',sub='')=>`<div class="metric-card"><div class="metric-label">${label}</div><div class="metric-value ${cls}">${val}</div>${sub?`<div class="metric-sub">${sub}</div>`:''}</div>`;
+  const metricsGrid=[mf(DL.Price,valid(d.price)?'$'+parseFloat(d.price).toFixed(2):'—','gold'),mf(DL.MktCap,valid(d.market_cap)?'$'+(d.market_cap/1e9).toFixed(1)+'B':'—'),mf(DL.DivYield,valid(d.div_yield)?parseFloat(d.div_yield).toFixed(2)+'%':'—'),mf(DL.Beta,valid(d.beta)?parseFloat(d.beta).toFixed(2):'—'),mf(DL.PiotroskiF,valid(d.piotroski_f)?d.piotroski_f:'—','','0–9'),mf(DL.AltmanZ,valid(d.altman_z)?parseFloat(d.altman_z).toFixed(2):'—',altmanCls(d.altman_z)),mf(DL.Analysts,d.analysts||'—'),mf(DL.vsSector,valid(d.vs_sector)?(parseFloat(d.vs_sector)>0?'+':'')+parseFloat(d.vs_sector).toFixed(1):'—',signCls(d.vs_sector)),mf(DL.Coverage,valid(d.coverage)?parseFloat(d.coverage).toFixed(0)+'%':'—'),mf('ROE %',valid(d.roe)?parseFloat(d.roe).toFixed(1)+'%':'—',signCls(d.roe)),mf('Net Margin',valid(d.net_margin)?parseFloat(d.net_margin).toFixed(1)+'%':'—',signCls(d.net_margin)),mf('Rev Growth',valid(d.rev_growth)?parseFloat(d.rev_growth).toFixed(1)+'%':'—',signCls(d.rev_growth))].join('');
+  const valCards=[{l:'P/E',v:d.pe,dec:1},{l:'Fwd P/E',v:d.fwd_pe,dec:1},{l:'P/B',v:d.pb,dec:2},{l:'EV/EBITDA',v:d.ev_ebitda,dec:1},{l:'FCF Yield',v:d.fcf_yield,suf:'%',dec:1}].map(({l,v,dec,suf=''})=>`<div class="val-card"><div class="val-label">${l}</div><div class="val-num ${signCls(v)}">${valid(v)?parseFloat(v).toFixed(dec)+suf:'—'}</div></div>`).join('');
+  const ptUpside=valid(d.pt_upside)?`<div class="val-card"><div class="val-label">PT Upside</div><div class="val-num ${signCls(d.pt_upside)}">${parseFloat(d.pt_upside).toFixed(1)}%</div></div>`:'';
+  const trBull=valid(d.tr_news_bull)?parseFloat(d.tr_news_bull):null;
+  const trBlogger=valid(d.tr_blogger_bull)?parseFloat(d.tr_blogger_bull):null;
+  const trCard1=`<div class="tr-card"><div class="tr-card-title">SmartScore</div><div class="ss-big" style="background:${ss.bg};color:${ss.color}">${d.tr_smartscore||'—'}</div><div class="tr-card-sub">${(d.tr_consensus||'—').replace('Moderate','Mod ').replace('Strong','Str. ')}</div></div>`;
+  const trCard2=`<div class="tr-card"><div class="tr-card-title">News Sentiment</div><div class="tr-card-main" style="color:${trBull&&trBull>50?'var(--teal)':'var(--red2)'}">${trBull!==null?trBull.toFixed(0)+'%':'—'}</div><div class="sentiment-bar"><div class="sentiment-fill" style="width:${trBull||0}%;background:${trBull&&trBull>50?'var(--teal)':'var(--red2)'}"></div></div><div class="tr-card-sub">Bullish · ${trBlogger!==null?trBlogger.toFixed(0)+'%':'—'} bloggers</div></div>`;
+  const trCard3=`<div class="tr-card"><div class="tr-card-title">Institutional & Insider</div><div class="tr-card-main">${d.tr_insider||'—'}</div><div class="tr-card-sub">Insider direction</div><div style="margin-top:8px"><div class="tr-card-title">30D Change</div><div class="metric-value ${signCls(d.tr_inv_chg_30d)}" style="font-size:16px">${valid(d.tr_inv_chg_30d)?parseFloat(d.tr_inv_chg_30d).toFixed(1)+'%':'—'}</div></div></div>`;
+  return`<div class="stock-detail-inner"><div class="detail-header"><div><div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span class="detail-ticker-big">${d.ticker}</span><span class="detail-pill-sector" style="background:${sc.bg};color:${sc.color}">${sLabel}</span></div><div class="detail-company-name">${d.company||''}</div></div><div style="text-align:right"><div class="detail-price">${valid(d.price)?'$'+parseFloat(d.price).toFixed(2):'—'}</div><div style="font-size:12px;color:var(--text2);margin-top:2px">Rank #${d.rank} · Score ${valid(d.composite)?parseFloat(d.composite).toFixed(1):'—'}</div><a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank" style="font-size:11px;color:var(--teal);text-decoration:none;display:inline-block;margin-top:4px">Yahoo Finance ↗</a></div></div><div class="detail-tabs" id="dtabs-${d.ticker}"><button class="detail-tab active" data-dtab="overview" onclick="switchDetailTab('${d.ticker}','overview')">Overview</button><button class="detail-tab" data-dtab="pillars" onclick="switchDetailTab('${d.ticker}','pillars')">Pillars</button><button class="detail-tab" data-dtab="valuation" onclick="switchDetailTab('${d.ticker}','valuation')">Valuation</button><button class="detail-tab" data-dtab="tipranks" onclick="switchDetailTab('${d.ticker}','tipranks')">TipRanks</button></div><div id="dtab-${d.ticker}-overview"><div class="metrics-grid">${metricsGrid}</div></div><div id="dtab-${d.ticker}-pillars" style="display:none"><div class="pillar-grid">${pillarGrid}</div></div><div id="dtab-${d.ticker}-valuation" style="display:none"><div class="val-grid">${valCards}${ptUpside}</div></div><div id="dtab-${d.ticker}-tipranks" style="display:none"><div class="tr-grid">${trCard1}${trCard2}${trCard3}</div></div></div>`;
 }
 
-PCT_COLS_FRACTION = {
-    "tr_news_bullish", "tr_blogger_bullish",
-    "tr_investor_chg_30d", "tr_investor_chg_7d",
-    "tr_momentum_12m", "tr_roe", "tr_asset_growth", "tr_pt_upside",
-    "perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite",
-}
-
-ALL_PCT_COLS = PCT_COLS_DECIMAL | PCT_COLS_FRACTION
-
-
-def style_and_export(df: pd.DataFrame, filepath: str):
-    out_df = df.reindex(columns=[c for c in EXPORT_COLS if c in df.columns])
-    out_df = out_df.rename(columns=FRIENDLY_NAMES)
-    for c in ALL_PCT_COLS:
-        fn = FRIENDLY_NAMES.get(c, c)
-        if fn in out_df.columns:
-            out_df[fn] = (out_df[fn] * 100).round(2)
-
-    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
-        out_df.to_excel(writer, sheet_name="Rankings", index=False)
-        sector_cols = [c for c in list(PILLAR_MAP.values())
-                       + ["composite_score", "valuation_score", "tr_smart_score"]
-                       if c in df.columns]
-        df.groupby("sector")[sector_cols].agg(["median","mean","count"]).round(1).to_excel(
-            writer, sheet_name="Sector Analysis")
-        out_df.head(50).to_excel(writer, sheet_name="Top 50", index=False)
-        wb = writer.book
-        for sn in ["Rankings", "Top 50"]:
-            _format_sheet(wb[sn])
-
-    print(f"✅  Excel → {filepath}")
-
-
-def _format_sheet(ws):
-    HEADER_FILL    = PatternFill("solid", fgColor="1F4E79")
-    HEADER_TR_FILL = PatternFill("solid", fgColor="154360")
-    ALT_FILL       = PatternFill("solid", fgColor="EBF3FB")
-    BORDER = Border(bottom=Side(style="thin", color="BFBFBF"),
-                    right=Side(style="thin",  color="BFBFBF"))
-
-    score_idx = val_idx = smart_idx = None
-    for idx, cell in enumerate(ws[1], 1):
-        val = str(cell.value or "")
-        cell.font      = Font(bold=True, color="FFFFFF", size=10)
-        cell.alignment = Alignment(horizontal="center", wrap_text=True)
-        cell.border    = BORDER
-        cell.fill      = HEADER_TR_FILL if val.startswith("TR") else HEADER_FILL
-        if "Composite Score" in val: score_idx = idx
-        if "Cheap/Expensive" in val: val_idx   = idx
-        if "SmartScore"      in val: smart_idx = idx
-
-    for ri, row in enumerate(ws.iter_rows(min_row=2), 2):
-        for cell in row:
-            cell.border = BORDER
-            cell.alignment = Alignment(horizontal="center")
-            if ri % 2 == 0:
-                cell.fill = ALT_FILL
-
-    for col in ws.columns:
-        ml = max((len(str(c.value)) if c.value else 0) for c in col)
-        ws.column_dimensions[get_column_letter(col[0].column)].width = min(ml + 2, 28)
-
-    for ci in [score_idx, val_idx, smart_idx]:
-        if ci:
-            cl = get_column_letter(ci)
-            ws.conditional_formatting.add(
-                f"{cl}2:{cl}{ws.max_row}",
-                ColorScaleRule(start_type="min",       start_color="FF4444",
-                               mid_type="percentile",  mid_value=50, mid_color="FFFF00",
-                               end_type="max",         end_color="00B050"),
-            )
-    ws.freeze_panes = "D2"
-
-
-# ════════════════════════════════════════════════════════════
-#  VISUALISATIONS  (Agg backend – no display)
-# ════════════════════════════════════════════════════════════
-
-def plot_all(df: pd.DataFrame):
-    sns.set_style("whitegrid")
-
-    # Top 30 composite
-    fig, ax = plt.subplots(figsize=(14, 8))
-    top30  = df.nlargest(30, "composite_score")
-    colors = plt.cm.RdYlGn(top30["composite_score"] / 100)
-    bars   = ax.barh(top30["ticker"][::-1], top30["composite_score"][::-1],
-                     color=colors[::-1], edgecolor="white")
-    ax.set_xlim(0, 108)
-    ax.set_xlabel("Composite Score", fontsize=12)
-    ax.set_title("Top 30 S&P 500 – Composite Score v5.2", fontsize=14, fontweight="bold")
-    for bar, s in zip(bars, top30["composite_score"][::-1]):
-        ax.text(bar.get_width() + 0.4, bar.get_y() + bar.get_height() / 2,
-                f"{s:.1f}", va="center", fontsize=8)
-    plt.tight_layout()
-    plt.savefig("artifacts/top30_composite.png", dpi=150)
-    plt.close()
-
-    # Sector medians
-    fig, ax = plt.subplots(figsize=(13, 5))
-    sec = df.groupby("sector")["composite_score"].median().sort_values(ascending=False)
-    sec.plot(kind="bar", ax=ax,
-             color=plt.cm.coolwarm_r(np.linspace(0, 1, len(sec))), edgecolor="white")
-    ax.set_title("Median Composite Score by Sector", fontsize=13, fontweight="bold")
-    ax.tick_params(axis="x", rotation=40)
-    plt.tight_layout()
-    plt.savefig("artifacts/sector_scores.png", dpi=150)
-    plt.close()
-
-    # Scatter cheap vs quality
-    fig, ax = plt.subplots(figsize=(10, 7))
-    sc = ax.scatter(df["valuation_score"], df["composite_score"],
-                    c=df["composite_score"], cmap="RdYlGn", alpha=0.65, s=35)
-    plt.colorbar(sc, label="Composite Score")
-    quad = df[(df["valuation_score"] > 65) & (df["composite_score"] > 65)]
-    for _, r in quad.iterrows():
-        ax.annotate(r["ticker"], (r["valuation_score"], r["composite_score"]),
-                    fontsize=7, alpha=0.85)
-    ax.axvline(50, color="grey", ls="--", alpha=0.4)
-    ax.axhline(df["composite_score"].median(), color="grey", ls="--", alpha=0.4)
-    ax.set_xlabel("Valuation Score (100=Cheap)")
-    ax.set_ylabel("Composite Score")
-    ax.set_title("Quality vs Valuation Quadrant Map", fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    plt.savefig("artifacts/valuation_vs_quality.png", dpi=150)
-    plt.close()
-
-    # SmartScore distribution
-    if "tr_smart_score" in df.columns and df["tr_smart_score"].notna().sum() > 10:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        for sv in sorted(df["tr_smart_score"].dropna().unique()):
-            ax.bar(sv, (df["tr_smart_score"] == sv).sum(),
-                   color=plt.cm.RdYlGn(sv / 10), edgecolor="white", width=0.8)
-        ax.set_xticks(range(1, 11))
-        ax.set_xlabel("SmartScore")
-        ax.set_ylabel("# Stocks")
-        ax.set_title("TipRanks SmartScore Distribution", fontsize=13, fontweight="bold")
-        plt.tight_layout()
-        plt.savefig("artifacts/smartscore_dist.png", dpi=150)
-        plt.close()
-
-    # Multi-timeframe momentum top 20
-    if "perf_12m" in df.columns:
-        top20 = df.nlargest(20, "composite_score")
-        fig, ax = plt.subplots(figsize=(14, 6))
-        x, w = np.arange(len(top20)), 0.2
-        for i, (col, label, color) in enumerate([
-            ("perf_12m","12M","#1976D2"), ("perf_6m","6M","#42A5F5"),
-            ("perf_3m","3M","#81D4FA"),  ("perf_1m","1M","#B3E5FC"),
-        ]):
-            ax.bar(x + i*w, top20[col].fillna(0)*100, w,
-                   label=label, color=color, edgecolor="white")
-        ax.set_xticks(x + 1.5*w)
-        ax.set_xticklabels(top20["ticker"], rotation=45, fontsize=8)
-        ax.set_ylabel("Return %")
-        ax.legend()
-        ax.set_title("Multi-Timeframe Momentum – Top 20", fontsize=13, fontweight="bold")
-        ax.axhline(0, color="black", linewidth=0.8)
-        plt.tight_layout()
-        plt.savefig("artifacts/momentum_decomp.png", dpi=150)
-        plt.close()
-
-    # Radar top 5
-    _plot_radar(df.nlargest(5, "composite_score"))
-
-
-def _plot_radar(df_top: pd.DataFrame):
-    pillar_cols = list(PILLAR_MAP.values())
-    labels  = [c.replace("pillar_","").replace("_","\n").title() for c in pillar_cols]
-    N       = len(pillar_cols)
-    angles  = [n / N * 2 * np.pi for n in range(N)] + [0]
-    colors  = ["#2196F3","#4CAF50","#FF9800","#E91E63","#9C27B0"]
-
-    fig, axes = plt.subplots(1, min(5, len(df_top)), figsize=(20, 4),
-                             subplot_kw=dict(polar=True))
-    if len(df_top) == 1:
-        axes = [axes]
-
-    for i, (_, row) in enumerate(df_top.iterrows()):
-        ax   = axes[i]
-        vals = [_safe(row.get(c), 50) for c in pillar_cols] + [_safe(row.get(pillar_cols[0]), 50)]
-        ax.plot(angles, vals, color=colors[i], linewidth=2)
-        ax.fill(angles, vals, color=colors[i], alpha=0.22)
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(labels, size=6.5)
-        ax.set_ylim(0, 100)
-        ss     = row.get("tr_smart_score", np.nan)
-        ss_str = f"  SS:{ss:.0f}" if not pd.isna(ss) else ""
-        ax.set_title(f"{row['ticker']}\n{row['composite_score']:.1f}{ss_str}",
-                     size=9, fontweight="bold", pad=10)
-
-    fig.suptitle("Pillar Breakdown – Top 5 (v5.2)", fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    plt.savefig("artifacts/top5_radar.png", dpi=150)
-    plt.close()
-
-
-# ════════════════════════════════════════════════════════════
-#  SUMMARY PRINT
-# ════════════════════════════════════════════════════════════
-
-def _print_summary(df: pd.DataFrame):
-    print("\n" + "=" * 65)
-    print("  TOP 20 STOCKS")
-    print("=" * 65)
-    show = ["rank","ticker","name","sector","composite_score",
-            "valuation_score","tr_smart_score","tr_analyst_consensus",
-            "earnings_quality_score","piotroski_score","altman_z","coverage"]
-    print(df[[c for c in show if c in df.columns]].head(20).to_string(index=False))
-
-    print("\n  SECTOR MEDIAN COMPOSITE SCORES")
-    print("-" * 45)
-    print(df.groupby("sector")["composite_score"].median()
-            .sort_values(ascending=False).round(1).to_string())
-
-    if "tr_smart_score" in df.columns and df["tr_smart_score"].notna().any():
-        top_ss = df[df["tr_smart_score"] >= 8][
-            ["rank","ticker","composite_score","tr_smart_score",
-             "tr_analyst_consensus","sector"]]
-        if not top_ss.empty:
-            print(f"\n  TIPRANKS SMARTSCORE >= 8  ({len(top_ss)} stocks)")
-            print("-" * 55)
-            print(top_ss.to_string(index=False))
-
-
-# ════════════════════════════════════════════════════════════
-#  JSON EXPORT  (for GitHub Pages dashboard)
-# ════════════════════════════════════════════════════════════
-
-def merge_breakout_signals(df: pd.DataFrame) -> pd.DataFrame:
-    import json as _json, os as _os
-    bp = "breakout_signals.json"
-    if not _os.path.exists(bp):
-        print("  ⚠  breakout_signals.json not found — skipping breakout merge")
-        for col in ["breakout_score","breakout_rank","breakout_phase","breakout_rr",
-                    "breakout_rs","breakout_stop","has_vcp","vcp_quality",
-                    "breakout_entry_quality","breakout_reasons"]:
-            df[col] = np.nan
-        df["has_vcp"] = False
-        df["breakout_entry_quality"] = ""
-        df["breakout_reasons"] = ""
-        return df
-
-    with open(bp, encoding="utf-8") as f:
-        data = _json.load(f)
-
-    signals = {s["ticker"]: s for s in data.get("top_signals", [])}
-    print(f"  ✅ Loaded {len(signals)} breakout signals (scan: {data.get('scan_date','')})")
-
-    def _get(ticker, field, default=np.nan):
-        return signals.get(ticker, {}).get(field, default)
-
-    df["breakout_score"]         = df["ticker"].apply(lambda t: _get(t, "breakout_score"))
-    df["breakout_rank"]          = df["ticker"].apply(lambda t: _get(t, "rank"))
-    df["breakout_phase"]         = df["ticker"].apply(lambda t: _get(t, "phase"))
-    df["breakout_rr"]            = df["ticker"].apply(lambda t: _get(t, "risk_reward"))
-    df["breakout_rs"]            = df["ticker"].apply(lambda t: _get(t, "rs"))
-    df["breakout_stop"]          = df["ticker"].apply(lambda t: _get(t, "stop_loss"))
-    df["has_vcp"]                = df["ticker"].apply(lambda t: signals.get(t, {}).get("has_vcp", False))
-    df["vcp_quality"]            = df["ticker"].apply(lambda t: _get(t, "vcp_quality"))
-    df["breakout_entry_quality"] = df["ticker"].apply(lambda t: signals.get(t, {}).get("entry_quality", ""))
-    df["breakout_reasons"]       = df["ticker"].apply(lambda t: " | ".join(signals.get(t, {}).get("reasons", [])))
-
-    n_overlap = df["breakout_score"].notna().sum()
-    print(f"  🔀 Overlap with S&P 500: {n_overlap} stocks in both systems")
-    return df
-
-
-def export_json(df: pd.DataFrame):
-    """Export ranking data as sp500_data.json for the web dashboard."""
-    def safe(v):
-        if v is None: return None
-        try:
-            f = float(v)
-            return None if (f != f) else round(f, 4)   # NaN → None
-        except Exception:
-            return str(v) if v else None
-
-    def pct(v):
-        """Fields stored as 0-1 fraction → multiply ×100 for display."""
-        r = safe(v)
-        return round(r * 100, 2) if r is not None else None
-
-    records = []
-    for _, row in df.iterrows():
-        records.append({
-            "rank":           int(row.get("rank", 0)),
-            "ticker":         str(row.get("ticker", "")),
-            "company":        str(row.get("name", "")),
-            "sector":         str(row.get("sector", "")),
-            "industry":       str(row.get("industry", "")),
-            # Core scores
-            "composite":      safe(row.get("composite_score")),
-            "valuation":      safe(row.get("valuation_score")),
-            # Pillars
-            "p_valuation":    safe(row.get("pillar_valuation")),
-            "p_profitability":safe(row.get("pillar_profitability")),
-            "p_growth":       safe(row.get("pillar_growth")),
-            "p_eq":           safe(row.get("pillar_earnings_quality")),
-            "p_fcf":          safe(row.get("pillar_fcf")),
-            "p_health":       safe(row.get("pillar_health")),
-            "p_momentum":     safe(row.get("pillar_momentum")),
-            "p_analyst":      safe(row.get("pillar_analyst")),
-            "p_piotroski":    safe(row.get("pillar_piotroski")),
-            # TipRanks
-            "tr_smartscore":  safe(row.get("tr_smart_score")),
-            "tr_consensus":   str(row.get("tr_analyst_consensus", "") or ""),
-            "tr_pt_upside":   pct(row.get("tr_pt_upside")),
-            "tr_news_bull":   pct(row.get("tr_news_bullish")),
-            "tr_blogger_bull":pct(row.get("tr_blogger_bullish")),
-            "tr_insider":     str(row.get("tr_insider_trend", "") or ""),
-            "tr_hedge":       str(row.get("tr_hedge_trend", "") or ""),
-            # Valuation multiples
-            "pe":             safe(row.get("trailingPE")),
-            "fwd_pe":         safe(row.get("forwardPE")),
-            "peg":            safe(row.get("pegRatio")),
-            "ps":             safe(row.get("priceToSalesTrailing12Months")),
-            "pb":             safe(row.get("priceToBook")),
-            "ev_ebitda":      safe(row.get("enterpriseToEbitda")),
-            # Profitability  (0-1 fraction → ×100)
-            "roe":            pct(row.get("returnOnEquity")),
-            "roa":            pct(row.get("returnOnAssets")),
-            "roic":           pct(row.get("roic")),
-            "net_margin":     pct(row.get("profitMargins")),
-            "gross_margin":   pct(row.get("grossMargins")),
-            "op_margin":      pct(row.get("operatingMargins")),
-            # Growth  (0-1 fraction → ×100)
-            "rev_growth":     pct(row.get("revenueGrowth")),
-            "eps_growth":     pct(row.get("earningsGrowth")),
-            # FCF  (0-1 fraction → ×100)
-            "fcf_yield":      pct(row.get("fcf_yield")),
-            "fcf_margin":     pct(row.get("fcf_margin")),
-            # Other
-            "current_ratio":  safe(row.get("currentRatio")),
-            "debt_equity":    safe(row.get("debtToEquity")),
-            "div_yield":      pct(row.get("dividendYield")),
-            "beta":           safe(row.get("beta")),
-            # Momentum  (0-1 fraction → ×100)
-            "perf_12m":       pct(row.get("perf_12m")),
-            "perf_6m":        pct(row.get("perf_6m")),
-            "perf_3m":        pct(row.get("perf_3m")),
-            "perf_1m":        pct(row.get("perf_1m")),
-            "momentum":       pct(row.get("momentum_composite")),
-            # Risk
-            "altman_z":       safe(row.get("altman_z")),
-            "piotroski_f":    safe(row.get("piotroski_score")),
-            "eq_score":       safe(row.get("earnings_quality_score")),
-            # Market data
-            "price":          safe(row.get("currentPrice")),
-            "market_cap":     safe(row.get("marketCap")),
-            "avg_volume":     safe(row.get("averageVolume")),
-            "pt_upside":      pct(row.get("pt_upside")),
-            "analysts":       safe(row.get("numberOfAnalystOpinions")),
-            "analyst_mean":   safe(row.get("recommendationMean")),
-            "payout_ratio":   pct(row.get("payoutRatio")),
-            "fcf_to_ni":      safe(row.get("fcf_to_ni")),
-            "tr_asset_gr":    pct(row.get("tr_asset_growth")),
-            "tr_inv_chg_30d": pct(row.get("tr_investor_chg_30d")),
-            "tr_inv_chg_7d":  pct(row.get("tr_investor_chg_7d")),
-            "tr_mom_12m":     pct(row.get("tr_momentum_12m")),
-            "coverage":       pct(row.get("coverage")),
-            "vs_sector":      safe(row.get("vs_sector")),
-            # Breakout scanner
-            "breakout_score":  safe(row.get("breakout_score")),
-            "breakout_rank":   safe(row.get("breakout_rank")),
-            "breakout_phase":  safe(row.get("breakout_phase")),
-            "breakout_rr":     safe(row.get("breakout_rr")),
-            "breakout_rs":     safe(row.get("breakout_rs")),
-            "breakout_stop":   safe(row.get("breakout_stop")),
-            "has_vcp":         bool(row.get("has_vcp")) if row.get("has_vcp") else False,
-            "vcp_quality":     safe(row.get("vcp_quality")),
-            "breakout_entry":  str(row.get("breakout_entry_quality","") or ""),
-            "breakout_reasons":str(row.get("breakout_reasons","") or ""),
-        })
-
-    import json as _json
-    payload = {
-        "generated": datetime.now().strftime("%Y-%m-%d %H:%M UTC"),
-        "count":     len(records),
-        "data":      records,
-    }
-    json_path = "artifacts/sp500_data.json"
-    with open(json_path, "w") as f:
-        _json.dump(payload, f, separators=(",", ":"))
-    # Also write to root for GitHub Pages
-    with open("sp500_data.json", "w") as f:
-        _json.dump(payload, f, separators=(",", ":"))
-    print(f"✅  JSON → {json_path}  ({len(records)} stocks)")
-
-
-
-
-def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
-    global _SECTOR_THRESHOLDS
-
-    print("=" * 65)
-    print(f"  S&P 500 ADVANCED RANKING v5.2 – GitHub Edition")
-    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print("=" * 65)
-
-    # 1. Cache check
-    cached = load_cache() if use_cache else None
-    if cached is not None:
-        df = cached
-        print("  Skipping fetch – using cached data")
-    else:
-        # 2. Universe
-        universe = get_sp500_tickers()
-        tickers  = universe["ticker"].tolist()
-
-        # 3. Yahoo Finance (parallel)
-        print(f"\n[1/6]  Yahoo Finance ({len(tickers)} tickers, parallel)...")
-        yf_data = fetch_yf_parallel(tickers)   # always returns dict, never None
-        fund_df = pd.DataFrame.from_dict(yf_data, orient="index")
-        fund_df.index.name = "ticker"
-        fund_df = fund_df.reset_index()
-        df = universe.merge(fund_df, on="ticker", how="left")
-
-        # 4. TipRanks
-        print("\n[2/6]  TipRanks...")
-        tr_df = fetch_tipranks(tickers)
-        if not tr_df.empty and "ticker" in tr_df.columns:
-            df = df.merge(tr_df, on="ticker", how="left")
-        else:
-            _TR_COLS = list(_parse_tipranks({}).keys())
-            for col in _TR_COLS:
-                df[col] = np.nan
-
-        # 5. Computed metrics
-        print("\n[3/6]  Computing metrics...")
-        df["piotroski_score"]        = df.apply(compute_piotroski,        axis=1)
-        df["altman_z"]               = df.apply(compute_altman,           axis=1)
-        # PEG fallback: pegRatio from Yahoo is often missing → compute from PE / epsGrowth
-        def _compute_peg(row):
-            peg = row.get("pegRatio")
-            if peg is not None and not (isinstance(peg, float) and np.isnan(peg)):
-                return peg
-            pe = row.get("trailingPE")
-            eg = row.get("earningsGrowth")  # fraction e.g. 0.15 = 15%
-            if pe is not None and eg is not None and eg > 0.01:
-                try:
-                    return round(float(pe) / (float(eg) * 100), 2)
-                except Exception:
-                    return np.nan
-            return np.nan
-        df["pegRatio"] = df.apply(_compute_peg, axis=1)
-        df["roic"]                   = df.apply(compute_roic,             axis=1)
-        fcf_cols = df.apply(compute_fcf_metrics, axis=1, result_type="expand")
-        df = pd.concat([df, fcf_cols], axis=1)
-        df["pt_upside"]              = df.apply(compute_pt_upside,        axis=1)
-        df["tr_pt_upside"]           = df.apply(compute_tr_pt_upside,     axis=1)
-        df["earnings_quality_score"] = df.apply(compute_earnings_quality, axis=1)
-
-        # Clip financial outliers (negative equity → crazy ROE, tiny mktcap → crazy FCF yield)
-        df["returnOnEquity"] = df["returnOnEquity"].clip(-2.0, 5.0)
-        df["fcf_yield"]      = df["fcf_yield"].clip(-0.50, 0.50)
-        df["roic"]           = df["roic"].clip(-1.0, 3.0)
-
-        # 6. Price momentum
-        print("\n[4/6]  Multi-timeframe momentum...")
-        df = add_price_momentum(df, tickers)
-
-        # 7. Liquidity filter
-        before = len(df)
-        df = df[
-            (df["marketCap"].fillna(0)     >= CFG["min_market_cap"]) &
-            (df["averageVolume"].fillna(0) >= CFG["min_avg_volume"])
-        ].copy()
-        print(f"\n  Liquidity filter: {before} → {len(df)} "
-              f"(removed {before - len(df)})")
-
-        # 8. Coverage filter
-        df["coverage"] = compute_coverage(df)
-        before2 = len(df)
-        df = df[df["coverage"] >= CFG["min_coverage"]].copy()
-        print(f"  Coverage filter:  {before2} → {len(df)} "
-              f"(removed {before2 - len(df)})")
-
-        # 9. Dynamic thresholds
-        print("\n[5/6]  Dynamic sector thresholds...")
-        _SECTOR_THRESHOLDS = build_sector_thresholds(df)
-
-        # 10. Pillar scores
-        print("\n[6/6]  Pillar scores...")
-        df = build_pillar_scores(df)
-
-        # 11. Composite + valuation
-        df["composite_score"] = df.apply(compute_composite,       axis=1)
-        df["valuation_score"] = df.apply(compute_valuation_score, axis=1)
-
-        # 12. Rank + sector context
-        df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
-        df["rank"] = df.index + 1
-        df = add_sector_context(df)
-
-        save_cache(df)
-
-    # 13. Output
-    _print_summary(df)
-    print("\n  Generating charts...")
-    plot_all(df)
-    print("\n  Exporting Excel...")
-    style_and_export(df, CFG["output_file"])
-    print("\n  Merging breakout scanner signals...")
-    df = merge_breakout_signals(df)
-    print("\n  Exporting JSON for web dashboard...")
-    export_json(df)
-
-    print("\n✅  DONE!")
-    print(f"    Excel  → {CFG['output_file']}")
-    print("    Charts → artifacts/*.png")
-    return df
-
-
-# ════════════════════════════════════════════════════════════
-#  ENTRY POINT
-# ════════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    run_pipeline(use_cache=True)
+function switchDetailTab(ticker,tab){const tc=document.getElementById(`dtabs-${ticker}`);if(!tc)return;tc.querySelectorAll('.detail-tab').forEach(t=>t.classList.toggle('active',t.dataset.dtab===tab));['overview','pillars','valuation','tipranks'].forEach(t=>{const el=document.getElementById(`dtab-${ticker}-${t}`);if(el)el.style.display=t===tab?'block':'none';});}
+
+loadData();
+</script>
+</body>
+</html>
