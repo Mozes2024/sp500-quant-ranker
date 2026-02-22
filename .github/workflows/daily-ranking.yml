@@ -7,6 +7,11 @@ on:
     types: [screener-update]  # ← מופעל אוטומטית ע"י MOZES_stock-screener
   workflow_dispatch:           # הפעלה ידנית
 
+# מונע התנגשויות בין ריצות (schedule + dispatch + manual) שכולן מנסות לדחוף ל-main
+concurrency:
+  group: sp500-ranker-main
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pages: write
@@ -20,6 +25,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Log trigger source
         run: |
@@ -41,9 +48,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install yfinance pandas numpy "openpyxl==3.1.2" \
-                      requests beautifulsoup4 matplotlib seaborn \
-                      tqdm scipy
+          pip install yfinance pandas numpy "openpyxl==3.1.2"                       requests beautifulsoup4 matplotlib seaborn                       tqdm scipy
 
       - name: Restore S&P 500 cache (7 days)
         uses: actions/cache@v4
@@ -60,9 +65,9 @@ jobs:
             SCAN=$(python3 -c "import json; d=json.load(open('breakout_signals.json')); print(d.get('scan_date',''))")
             echo "✅ breakout_signals.json ready: $SIGNALS signals (scan: $SCAN)"
           else
-            echo "⚠ breakout_signals.json missing — fetching fallback..."
-            curl -sf "https://raw.githubusercontent.com/Mozes2024/MOZES_stock-screener/main/breakout_signals.json" \
-                 -o breakout_signals.json && echo "✅ Fetched from screener" || echo "⚠ Not available"
+            # הסקרינר דוחף את breakout_signals.json ישירות לריפו הזה דרך GitHub API.
+            # אם אין קובץ (למשל ריצה מתוזמנת לפני הסקרינר) — נמשיך בלי merge.
+            echo "⚠ breakout_signals.json missing — continuing without breakout merge"
           fi
 
       - name: Run ranking pipeline
@@ -74,9 +79,21 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # תמיד להסתנכרן עם ה-remote לפני Push כדי למנוע 'fetch first'
+          git fetch origin main
+          git pull --rebase origin main
+
           git add sp500_data.json
-          git diff --staged --quiet || git commit -m "📊 Update ranking data $(date +'%Y-%m-%d %H:%M')"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "📊 Update ranking data $(date +'%Y-%m-%d %H:%M')"
+
+          # ניסיון Push, ואם עדיין יש התנגשות (נדיר כשיש concurrency) — Pull+Rebase נוסף ו-Push שוב
+          git push || (git pull --rebase origin main && git push)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
