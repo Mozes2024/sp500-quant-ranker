@@ -44,14 +44,14 @@ os.makedirs("artifacts", exist_ok=True)
 # ════════════════════════════════════════════════════════════
 CFG = {
     "weights": {
-        "valuation":        0.19,
-        "profitability":    0.16,
+        "valuation":        0.15,   # reduced: 0.19→0.15 (Value alone = value trap risk)
+        "profitability":    0.18,   # increased: 0.16→0.18 (strongest academic quality factor)
         "growth":           0.13,
-        "earnings_quality": 0.08,
+        "earnings_quality": 0.09,   # slightly increased: 0.08→0.09
         "fcf_quality":      0.13,
-        "financial_health": 0.09,
-        "momentum":         0.09,
-        "analyst":          0.11,
+        "financial_health": 0.10,   # increased: 0.09→0.10 (now includes beta/low-vol)
+        "momentum":         0.12,   # increased: 0.09→0.12 (strong, persistent factor per Jegadeesh & Titman)
+        "analyst":          0.08,   # reduced: 0.11→0.08 (sentiment is lagging indicator)
         "piotroski":        0.02,
     },
     "min_coverage":    0.45,
@@ -65,7 +65,7 @@ CFG = {
 }
 assert abs(sum(CFG["weights"].values()) - 1.0) < 1e-6, "Weights must sum to 1.0"
 
-CACHE_FILE = "sp500_cache_v6.pkl"
+CACHE_FILE = "sp500_cache_v5.pkl"
 
 
 # ════════════════════════════════════════════════════════════
@@ -371,10 +371,10 @@ def compute_altman(row: pd.Series) -> float:
         ta  = _safe(row.get("totalAssets"), 1)
         # workingCapital fallback: currentAssets - currentLiabilities
         wc = _safe(row.get("workingCapital"))
-        if wc is None or (isinstance(wc, float) and np.isnan(wc)):
+        if np.isnan(wc):                                 # FIX: was "is None" — _safe() never returns None
             ca = _safe(row.get("currentAssets"))
             cl = _safe(row.get("currentLiabilities"))
-            if ca is not None and cl is not None:
+            if not (np.isnan(ca) or np.isnan(cl)):       # FIX: was "is not None"
                 wc = ca - cl
             else:
                 return np.nan
@@ -383,7 +383,7 @@ def compute_altman(row: pd.Series) -> float:
         mv  = _safe(row.get("marketCap"))
         td  = _safe(row.get("totalDebt"), 1)
         rev = _safe(row.get("totalRevenue"))
-        if any(v is None for v in [re_, eb, mv, rev]):
+        if any(np.isnan(v) for v in [wc, re_, eb, mv, rev]):  # FIX: was "is None"
             return np.nan
         return round(1.2*(wc/ta) + 1.4*(re_/ta) + 3.3*(eb/ta)
                      + 0.6*(mv/td) + 1.0*(rev/ta), 3)
@@ -427,8 +427,8 @@ def compute_earnings_quality(row: pd.Series) -> float:
         gm   = _safe(row.get("grossMargins"))
         if not (np.isnan(ni) or np.isnan(fcf)):
             accrual = (ni - fcf) / ta
-            if accrual < 0.03:   score += 2
-            elif accrual < 0.08: score += 1
+            if accrual < 0:      score += 2   # FIX: FCF > NI = real cash exceeds accounting profit (strong signal)
+            elif accrual < 0.05: score += 1   # FIX: was 0.03/0.08 — thresholds tightened
         if not np.isnan(roic):
             if roic > 0.15:   score += 1.5
             elif roic > 0.08: score += 0.5
@@ -533,12 +533,12 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_tr_roe"] = sector_percentile(df, "tr_roe",         True)
     df["pillar_profitability"] = df[["s_roe","s_roa","s_roic","s_pm","s_tr_roe"]].mean(axis=1, skipna=True)
 
-    # 3. Growth
+    # 3. Growth — fcf_margin removed (already in FCF pillar); replaced with fcf_to_ni as growth quality signal
     df["s_rev_g"]      = sector_percentile(df, "revenueGrowth",   True)
     df["s_earn_g"]     = sector_percentile(df, "earningsGrowth",  True)
-    df["s_fcf_m"]      = sector_percentile(df, "fcf_margin",      True)
-    df["s_tr_asset_g"] = sector_percentile(df, "tr_asset_growth", True)
-    df["pillar_growth"] = df[["s_rev_g","s_earn_g","s_fcf_m","s_tr_asset_g"]].mean(axis=1, skipna=True)
+    df["s_fcf_ni_g"]   = sector_percentile(df, "fcf_to_ni",       True)   # FIX: FCF/NI replaces fcf_margin (measures earning conversion quality, not double-counted)
+    df["s_tr_asset_g"] = sector_percentile(df, "tr_asset_growth", False)  # FIX: high asset growth → lower future returns (Titman et al. 2004)
+    df["pillar_growth"] = df[["s_rev_g","s_earn_g","s_fcf_ni_g","s_tr_asset_g"]].mean(axis=1, skipna=True)
 
     # 4. Earnings Quality
     df["s_eq"] = sector_percentile(df, "earnings_quality_score", True)
@@ -549,20 +549,21 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_fcf_ni"]    = sector_percentile(df, "fcf_to_ni",  True)
     df["pillar_fcf"]  = df[["s_fcf_yield","s_fcf_ni","s_fcf_m"]].mean(axis=1, skipna=True)
 
-    # 6. Financial Health
+    # 6. Financial Health — added beta (low volatility = financial stability signal)
     df["s_cr"]     = sector_percentile(df, "currentRatio", True)
     df["s_de"]     = sector_percentile(df, "debtToEquity", False)
     df["s_altman"] = sector_percentile(df, "altman_z",     True)
-    df["pillar_health"] = df[["s_cr","s_de","s_altman"]].mean(axis=1, skipna=True)
+    df["s_beta"]   = sector_percentile(df, "beta",         False)  # FIX: moved from momentum — low vol is a risk/health signal, not momentum
+    df["pillar_health"] = df[["s_cr","s_de","s_altman","s_beta"]].mean(axis=1, skipna=True)
 
-    # 7. Momentum
+    # 7. Momentum — beta removed; now a pure price-momentum pillar
     df["s_mom"]      = sector_percentile(df, "momentum_composite", True)
-    df["s_beta"]     = sector_percentile(df, "beta",               False)
     df["s_tr_mom12"] = sector_percentile(df, "tr_momentum_12m",    True)
     df["s_tr_sma"]   = sector_percentile(df, "tr_sma_num",         True)
-    df["pillar_momentum"] = df[["s_mom","s_beta","s_tr_mom12","s_tr_sma"]].mean(axis=1, skipna=True)
+    df["pillar_momentum"] = df[["s_mom","s_tr_mom12","s_tr_sma"]].mean(axis=1, skipna=True)
 
-    # 8. Analyst + TipRanks Sentiment
+    # 8. Analyst + TipRanks Sentiment — weighted combination
+    # SmartScore is itself an aggregation of many signals below → give it dominant weight
     df["s_rec"]          = sector_percentile(df, "recommendationMean",   False)
     df["s_pt_upside"]    = sector_percentile(df, "pt_upside",            True)
     df["s_tr_smart"]     = sector_percentile(df, "tr_smart_score",       True)
@@ -573,10 +574,22 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_tr_insider"]   = sector_percentile(df, "tr_insider_trend_num", True)
     df["s_tr_inv_chg"]   = sector_percentile(df, "tr_investor_chg_30d",  True)
     df["s_tr_pt"]        = sector_percentile(df, "tr_pt_upside",         True)
-    df["pillar_analyst"] = df[[
-        "s_rec","s_pt_upside","s_tr_smart","s_tr_consensus","s_tr_news",
-        "s_tr_blogger","s_tr_hedge","s_tr_insider","s_tr_inv_chg","s_tr_pt",
-    ]].mean(axis=1, skipna=True)
+    # FIX: weighted instead of equal — SmartScore 30%, consensus 20%, avg PT 20%, insider 15%, hedge 10%, news/blogger 2.5% each
+    # PT: average of Yahoo and TipRanks to avoid double-counting
+    s_pt_avg = df[["s_pt_upside","s_tr_pt"]].mean(axis=1, skipna=True)
+    df["pillar_analyst"] = (
+        0.30 * df["s_tr_smart"].fillna(df["s_tr_smart"].median()) +
+        0.20 * df["s_tr_consensus"].fillna(df["s_rec"]) +
+        0.20 * s_pt_avg +
+        0.15 * df["s_tr_insider"].fillna(50) +
+        0.10 * df["s_tr_hedge"].fillna(50) +
+        0.025 * df["s_tr_news"].fillna(50) +
+        0.025 * df["s_tr_inv_chg"].fillna(50)
+    )
+    # Rescale to 10–100 band (same as sector_percentile output)
+    _min, _max = df["pillar_analyst"].min(), df["pillar_analyst"].max()
+    if _max > _min:
+        df["pillar_analyst"] = ((df["pillar_analyst"] - _min) / (_max - _min)) * 90 + 10
 
     # 9. Piotroski
     df["s_piotroski"]      = sector_percentile(df, "piotroski_score", True)
@@ -699,11 +712,6 @@ def load_cache() -> "pd.DataFrame | None":
         age = datetime.now() - ts
         if age < timedelta(hours=CFG["cache_hours"]):
             print(f"✅  Cache loaded ({int(age.total_seconds()//60)} min old)")
-            # Guard: if cache is missing newer computed columns, ignore it to avoid blank UI fields
-            required_cols = ["pillar_cash_flow", "pillar_balance_sheet", "altman_z", "piotroski_f"]
-            if any(c not in data.columns for c in required_cols):
-                print("  ⚠️  Cache missing required columns — rebuilding")
-                return None
             return data
         print(f"  ℹ️  Cache expired ({int(age.total_seconds()//3600)}h old) — refreshing")
     except Exception as e:
