@@ -1,76 +1,401 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>S&P 500 Mozes Ranker</title>
-  <style>
-    body{font-family:system-ui;background:#0b1220;color:#e6edf3;margin:0;padding:24px}
-    h1{margin:0 0 6px 0}
-    .muted{color:#9aa4b2;font-size:13px}
-    .card{margin-top:18px;padding:16px;border:1px solid #1e2c3d;border-radius:12px;background:#111a2b}
-    table{width:100%;border-collapse:collapse;margin-top:12px}
-    th,td{padding:8px;border-bottom:1px solid #1e2c3d;text-align:left;font-size:13px}
-    th{color:#9aa4b2}
-    .error{color:#ff6b6b;margin-top:12px;font-weight:600}
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>S&P 500 Mozes Ranker</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#070c12; --surface:#0c1520; --surface2:#111d2b; --surface3:#162436;
+  --border:#1d2e40; --border2:#243a50;
+  --gold:#f5a623; --gold2:#ffbf3b;
+  --cyan:#39c3ff; --green:#34d399; --red:#fb7185; --purple:#a78bfa;
+  --text:#e5e7eb; --muted:#9aa4b2; --muted2:#7b8794;
+  --shadow: 0 20px 60px rgba(0,0,0,.45);
+  --radius:18px;
+}
+* { box-sizing:border-box; }
+html,body { height:100%; }
+body{
+  margin:0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background: radial-gradient(1200px 700px at 20% 10%, rgba(245,166,35,.12), transparent 55%),
+              radial-gradient(900px 600px at 80% 20%, rgba(57,195,255,.10), transparent 55%),
+              radial-gradient(900px 700px at 50% 90%, rgba(167,139,250,.08), transparent 55%),
+              var(--bg);
+  color:var(--text);
+}
+a{color:inherit}
+.wrap{max-width:1320px;margin:0 auto;padding:28px 18px 40px;}
+.header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:14px;}
+.brand h1{margin:0;font-size:28px;letter-spacing:-0.02em;font-weight:900;}
+.brand .sub{margin-top:4px;color:var(--muted);font-size:13px;display:flex;gap:10px;flex-wrap:wrap;}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--muted);font-size:12px;}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 0 3px rgba(245,166,35,.14);}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(52,211,153,.14);display:inline-block;margin-inline-end:8px;}
+.header-right{display:flex;align-items:center;gap:10px;}
+.lang-toggle{display:flex;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+.lang-toggle button{appearance:none;background:transparent;border:0;padding:8px 10px;color:var(--muted);font-weight:700;cursor:pointer;font-size:12px;}
+.lang-toggle button.active{background:rgba(245,166,35,.15);color:var(--gold2);}
+.card{background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));border:1px solid var(--border);border-radius: var(--radius);box-shadow: var(--shadow);}
+.stats{display:grid;grid-template-columns: repeat(4, 1fr);gap:12px;padding:14px;margin: 14px 0;}
+.stat{padding:14px 14px 12px;border-radius:14px;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.06);min-height:84px;}
+.stat .label{color:var(--muted);font-size:12px;letter-spacing:.02em;margin-bottom:10px;}
+.stat .value{font-size:22px;font-weight:900;letter-spacing:-0.02em;}
+.stat .hint{margin-top:6px;color:var(--muted2);font-size:12px;font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;}
+.controls{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;flex-wrap:wrap;}
+.search{flex:1;min-width:260px;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;border:1px solid var(--border2);background:rgba(0,0,0,.20);}
+.search input{width:100%;background:transparent;border:0;outline:0;color:var(--text);font-size:14px;}
+.pills{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:999px;background:rgba(255,255,255,.03);border:1px solid var(--border2);color:var(--muted);font-size:12px;cursor:pointer;user-select:none;}
+.pill.active{background:rgba(57,195,255,.12);border-color: rgba(57,195,255,.35);color: #cfefff;}
+.pill .mini{width:7px;height:7px;border-radius:50%;background:var(--cyan);}
+.btn{background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.35);color:var(--gold2);padding:9px 12px;border-radius:12px;font-weight:800;cursor:pointer;font-size:12px;}
+.tablewrap{padding: 10px 12px 16px;}
+.table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border-radius: 16px;border:1px solid rgba(255,255,255,.06);}
+.table thead th{position:sticky;top:0;z-index:5;background:rgba(8,14,22,.92);backdrop-filter: blur(10px);color:var(--muted);font-size:12px;text-align:left;padding:12px 10px;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer;white-space:nowrap;}
+.table tbody td{padding:12px 10px;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top;}
+.table tbody tr:hover td{background:rgba(255,255,255,.03);}
+.ticker{font-weight:900;letter-spacing:.02em;}
+.company{color:var(--muted);font-size:12px;margin-top:3px;max-width: 380px;}
+.score{font-family:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;font-weight:800;padding:6px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.16);}
+.score .bar{width:60px;height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;}
+.score .bar span{display:block;height:100%;width:50%;background: linear-gradient(90deg, rgba(57,195,255,.85), rgba(245,166,35,.9));}
+.kpi{font-family:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;color:#d8e6f5;font-weight:800;font-size:12px;}
+.muted{ color:var(--muted); }
+.tag{display:inline-flex;padding:6px 9px;border-radius:999px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:var(--muted);font-size:12px;margin-right:6px;}
+.tag.good{ border-color: rgba(52,211,153,.35); background:rgba(52,211,153,.10); color:#baf7df; }
+.tag.bad{ border-color: rgba(251,113,133,.35); background:rgba(251,113,133,.10); color:#ffd0d8; }
+.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:60px 18px;text-align:center;}
+.spinner{width:48px;height:48px;border-radius:50%;border:4px solid rgba(255,255,255,.10);border-top-color: var(--gold);animation: spin 1s linear infinite;}
+@keyframes spin{ to{ transform: rotate(360deg);} }
+.error{display:none;padding:18px;margin-top:14px;border-radius:16px;border:1px solid rgba(251,113,133,.35);background:rgba(251,113,133,.08);color:#ffd0d8;}
+.footer{margin-top:14px;color:var(--muted2);font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+.small{font-family:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;}
+.view-tabs{display:flex;gap:8px;flex-wrap:wrap;padding: 0 14px 14px;}
+.view-tab{padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.03);color:var(--muted);font-size:12px;cursor:pointer;user-select:none;}
+.view-tab.active{background:rgba(52,211,153,.10);border-color: rgba(52,211,153,.30);color:#c7fbe4;}
+@media (max-width: 1080px){.stats{ grid-template-columns: repeat(2,1fr); }.company{ max-width: 240px; }}
+@media (max-width: 560px){.stats{ grid-template-columns: 1fr; }}
+</style>
 </head>
 <body>
-  <h1>S&P 500 Mozes Ranker</h1>
-  <div class="muted" id="lastUpdated">Loading...</div>
+<div class="wrap">
+  <div class="header">
+    <div class="brand">
+      <h1><span style="color:var(--gold)">S&P 500</span> Mozes Ranker</h1>
+      <div class="sub">
+        <span class="badge"><span class="dot"></span> v5.3 • 9-Pillar + Breakout Scanner</span>
+        <span class="badge" id="lastUpdated"><span class="live-dot"></span></span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="lang-toggle" dir="ltr">
+        <button id="btnEn" class="active" onclick="setLang('en')">EN</button>
+        <button id="btnHe" onclick="setLang('he')">עברית</button>
+      </div>
+    </div>
+  </div>
 
-  <div class="card">
-    <div id="status">Fetching sp500_data.json...</div>
-    <div id="error" class="error" style="display:none"></div>
-    <table id="tbl" style="display:none">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Ticker</th>
-          <th>Company</th>
-          <th>Composite</th>
-          <th>Valuation</th>
-          <th>SmartScore</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
+  <div id="loading" class="card loading">
+    <div class="spinner"></div>
+    <div style="font-weight:900;letter-spacing:-.01em;">LOADING MARKET DATA...</div>
+    <div class="muted small">Fetching sp500_data.json</div>
+  </div>
+
+  <div id="error-msg" class="error card">
+    <div style="font-weight:900; margin-bottom:8px;">Could not load market data.</div>
+    <div class="muted">Open DevTools → Console to see the exact error.</div>
+  </div>
+
+  <div id="statsBar" class="card stats" style="display:none">
+    <div class="stat">
+      <div class="label" id="statLabelRanked">Stocks Ranked</div>
+      <div class="value" id="statCount">—</div>
+      <div class="hint" id="statCountHint">stocks</div>
+    </div>
+    <div class="stat">
+      <div class="label" id="statLabelAvg">Avg Composite</div>
+      <div class="value" id="statAvg">—</div>
+      <div class="hint small">0–100</div>
+    </div>
+    <div class="stat">
+      <div class="label" id="statLabelTopSector">Top Sector</div>
+      <div class="value" id="statTopSector">—</div>
+      <div class="hint small">by composite</div>
+    </div>
+    <div class="stat">
+      <div class="label" id="statLabelSS8">SmartScore ≥ 8</div>
+      <div class="value" id="statSS8">—</div>
+      <div class="hint small">TipRanks coverage</div>
+    </div>
+  </div>
+
+  <div id="controls" class="card controls" style="display:none">
+    <div class="search">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style="opacity:.7"><path d="M21 21l-4.3-4.3m1.8-5.2a7 7 0 11-14 0 7 7 0 0114 0z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="q" placeholder="Search ticker or company…" oninput="applyFilters()"/>
+    </div>
+    <div class="pills">
+      <div class="pill" id="pSS8" onclick="togglePill('ss8')"><span class="mini"></span><span id="pSS8Label">SmartScore ≥ 8</span></div>
+      <div class="pill" id="pBreakout" onclick="togglePill('breakout')"><span class="mini"></span><span id="pBreakoutLabel">Breakout only</span></div>
+      <div class="pill" id="pTR" onclick="togglePill('tr')"><span class="mini"></span><span id="pTRLabel">TR Coverage</span></div>
+      <button class="btn" onclick="resetAll()" id="btnReset">✕ Reset</button>
+    </div>
+  </div>
+
+  <div id="viewTabs" class="view-tabs" style="display:none">
+    <div class="view-tab active" data-view="score" onclick="setView('score')" id="vtScore">📊 Score</div>
+    <div class="view-tab" data-view="valuation" onclick="setView('valuation')" id="vtVal">💰 Valuation</div>
+    <div class="view-tab" data-view="profitability" onclick="setView('profitability')" id="vtProf">💹 Profitability</div>
+    <div class="view-tab" data-view="growth" onclick="setView('growth')" id="vtGrowth">🚀 Growth</div>
+    <div class="view-tab" data-view="cashflow" onclick="setView('cashflow')" id="vtCF">💵 Cash Flow</div>
+    <div class="view-tab" data-view="health" onclick="setView('health')" id="vtHealth">🏦 Balance Sheet</div>
+    <div class="view-tab" data-view="momentum" onclick="setView('momentum')" id="vtMom">⚡ Momentum</div>
+    <div class="view-tab" data-view="analyst" onclick="setView('analyst')" id="vtAnalyst">🔭 Analyst</div>
+    <div class="view-tab" data-view="tipranks" onclick="setView('tipranks')" id="vtTR">🎯 TipRanks</div>
+    <div class="view-tab" data-view="breakout" onclick="setView('breakout')" id="vtBreakout">⚡ Breakout</div>
+  </div>
+
+  <div class="card tablewrap" style="margin-top:12px">
+    <table class="table" id="tbl">
+      <thead><tr id="thead"></tr></thead>
+      <tbody id="tbody"></tbody>
     </table>
   </div>
 
+  <div class="footer">
+    <div class="muted">Data sources: yfinance + TipRanks (via pipeline)</div>
+    <div class="muted small">Click a row to expand details • Sort by clicking headers</div>
+  </div>
+</div>
+
 <script>
+// Minimal translations (safe quotes). Extend freely later.
+const I18N = {
+  en: {
+    ranked:"Stocks Ranked", avg:"Avg Composite", topsec:"Top Sector", ss8:"SmartScore ≥ 8", tr:"TR Coverage",
+    stocks:"stocks", searchph:"Search ticker or company…", reset:"✕ Reset",
+    tabs:{score:"📊 Score", valuation:"💰 Valuation", profitability:"💹 Profitability", growth:"🚀 Growth", cashflow:"💵 Cash Flow",
+          health:"🏦 Balance Sheet", momentum:"⚡ Momentum", analyst:"🔭 Analyst", tipranks:"🎯 TipRanks", breakout:"⚡ Breakout"},
+    cols:{rank:"#", ticker:"Ticker", company:"Company", sector:"Sector", composite:"Composite", valuation:"Valuation",
+          smartscore:"SmartScore", consensus:"Consensus", pe:"P/E", perf_12m:"12M %", breakout_score:"Breakout"}
+  },
+  he: {
+    ranked:"מניות מדורגות", avg:"ציון ממוצע", topsec:"סקטור מוביל", ss8:"ציון חכם ≥ 8", tr:"כיסוי TipRanks",
+    stocks:"מניות", searchph:"חפש טיקר או חברה…", reset:"✕ איפוס",
+    tabs:{score:"📊 ציון", valuation:"💰 שווי", profitability:"💹 רווחיות", growth:"🚀 צמיחה", cashflow:"💵 תזרים",
+          health:"🏦 מאזן", momentum:"⚡ מומנטום", analyst:"🔭 אנליסטים", tipranks:"🎯 TipRanks", breakout:"⚡ פריצה"},
+    cols:{rank:"#", ticker:"טיקר", company:"חברה", sector:"סקטור", composite:"קומפוזיט", valuation:"שווי",
+          smartscore:"ציון חכם", consensus:"קונצנזוס", pe:"P/E", perf_12m:"12M %", breakout_score:"פריצה"}
+  }
+};
+
+let lang="en";
+let allData=[];
+let filtered=[];
+let sortKey="composite";
+let sortDir="desc";
+let pills={ss8:false, breakout:false, tr:false};
+let view="score";
+
+function t(k){ return (I18N[lang] && I18N[lang][k]) || I18N.en[k] || k; }
+function ttab(k){ return (I18N[lang].tabs && I18N[lang].tabs[k]) || I18N.en.tabs[k] || k; }
+function tcol(k){ return (I18N[lang].cols && I18N[lang].cols[k]) || I18N.en.cols[k] || k; }
+
+function setLang(l){
+  lang=l;
+  document.getElementById("btnEn").classList.toggle("active", l==="en");
+  document.getElementById("btnHe").classList.toggle("active", l==="he");
+  document.documentElement.lang = l==="he" ? "he" : "en";
+  document.body.dir = l==="he" ? "rtl" : "ltr";
+  applyI18n();
+  render();
+}
+
+function applyI18n(){
+  document.getElementById("statLabelRanked").textContent=t("ranked");
+  document.getElementById("statLabelAvg").textContent=t("avg");
+  document.getElementById("statLabelTopSector").textContent=t("topsec");
+  document.getElementById("statLabelSS8").textContent=t("ss8");
+  document.getElementById("statCountHint").textContent=t("stocks");
+  document.getElementById("q").placeholder=t("searchph");
+  document.getElementById("btnReset").textContent=t("reset");
+  document.getElementById("pSS8Label").textContent=t("ss8");
+  document.getElementById("pTRLabel").textContent=t("tr");
+  document.getElementById("vtScore").textContent=ttab("score");
+  document.getElementById("vtVal").textContent=ttab("valuation");
+  document.getElementById("vtProf").textContent=ttab("profitability");
+  document.getElementById("vtGrowth").textContent=ttab("growth");
+  document.getElementById("vtCF").textContent=ttab("cashflow");
+  document.getElementById("vtHealth").textContent=ttab("health");
+  document.getElementById("vtMom").textContent=ttab("momentum");
+  document.getElementById("vtAnalyst").textContent=ttab("analyst");
+  document.getElementById("vtTR").textContent=ttab("tipranks");
+  document.getElementById("vtBreakout").textContent=ttab("breakout");
+}
+
+function setView(v){
+  view=v;
+  document.querySelectorAll(".view-tab").forEach(el=>el.classList.toggle("active", el.dataset.view===v));
+  render();
+}
+
+function togglePill(k){
+  pills[k]=!pills[k];
+  const id = k==="ss8" ? "pSS8" : k==="breakout" ? "pBreakout" : "pTR";
+  document.getElementById(id).classList.toggle("active", pills[k]);
+  applyFilters();
+}
+function resetAll(){
+  pills={ss8:false, breakout:false, tr:false};
+  ["pSS8","pBreakout","pTR"].forEach(id=>document.getElementById(id).classList.remove("active"));
+  document.getElementById("q").value="";
+  sortKey="composite"; sortDir="desc";
+  filtered=[];
+  render();
+}
+
+function fmt(n, d=1){
+  const x=Number(n);
+  if(!Number.isFinite(x)) return "—";
+  return x.toFixed(d);
+}
+function pct(n, d=1){
+  const x=Number(n);
+  if(!Number.isFinite(x)) return "—";
+  return x.toFixed(d)+"%";
+}
+
+function updateStats(data){
+  document.getElementById("statCount").textContent = String(data.length);
+  const avg = data.reduce((s,r)=>s+(Number(r.composite)||0),0) / Math.max(1,data.length);
+  document.getElementById("statAvg").textContent = fmt(avg,1);
+  const ss8 = data.filter(r=>Number(r.tr_smartscore ?? r.smartscore) >= 8).length;
+  document.getElementById("statSS8").textContent = String(ss8);
+  // top sector (by avg composite)
+  const map={};
+  data.forEach(r=>{
+    const s=r.sector || "—";
+    map[s]=map[s]||[];
+    map[s].push(Number(r.composite)||0);
+  });
+  const top = Object.entries(map).map(([k,v])=>[k, v.reduce((a,b)=>a+b,0)/Math.max(1,v.length)]).sort((a,b)=>b[1]-a[1])[0];
+  document.getElementById("statTopSector").textContent = (top && top[0]) ? top[0] : "—";
+}
+
+function applyFilters(){
+  const q=(document.getElementById("q").value||"").trim().toLowerCase();
+  filtered = allData.filter(r=>{
+    if(q){
+      const t=(r.ticker||"").toLowerCase();
+      const c=(r.company||"").toLowerCase();
+      if(!t.includes(q) && !c.includes(q)) return false;
+    }
+    if(pills.ss8){
+      const ss=Number(r.tr_smartscore ?? r.smartscore);
+      if(!(Number.isFinite(ss) && ss>=8)) return false;
+    }
+    if(pills.tr){
+      const cov=Number(r.coverage);
+      if(!(Number.isFinite(cov) && cov>0)) return false;
+    }
+    if(pills.breakout){
+      const b=Number(r.breakout_score);
+      if(!(Number.isFinite(b) && b>0)) return false;
+    }
+    return true;
+  });
+  render();
+}
+
+function setSort(k){
+  if(sortKey===k){
+    sortDir = sortDir==="desc" ? "asc" : "desc";
+  }else{
+    sortKey=k; sortDir="desc";
+  }
+  render();
+}
+function sortData(data){
+  const dir = sortDir==="desc" ? -1 : 1;
+  return [...data].sort((a,b)=>{
+    const av=Number(a[sortKey]);
+    const bv=Number(b[sortKey]);
+    if(Number.isFinite(av) && Number.isFinite(bv)) return (av-bv)*dir;
+    return String(a[sortKey]??"").localeCompare(String(b[sortKey]??""))*dir;
+  });
+}
+
+function buildHeader(cols){
+  const tr=document.getElementById("thead");
+  tr.innerHTML="";
+  cols.forEach(c=>{
+    const th=document.createElement("th");
+    th.textContent=tcol(c);
+    th.onclick=()=>setSort(c);
+    tr.appendChild(th);
+  });
+}
+
+function render(){
+  const cols=["rank","ticker","sector","composite","valuation","smartscore","consensus","pe","perf_12m","breakout_score"];
+  buildHeader(cols);
+  const data = sortData(filtered.length ? filtered : allData);
+  updateStats(data);
+  const tbody=document.getElementById("tbody");
+  tbody.innerHTML = data.map((r,i)=>{
+    const ss=Number(r.tr_smartscore ?? r.smartscore);
+    const ssTag = Number.isFinite(ss) ? `<span class="tag ${ss>=8?'good':'bad'}">SS ${ss}</span>` : "";
+    const trTag = (Number(r.coverage||0)>0) ? `<span class="tag good">TR</span>` : "";
+    const bo = Number(r.breakout_score);
+    const boTag = (Number.isFinite(bo)&&bo>0) ? `<span class="tag good">BO</span>` : "";
+    return `<tr>
+      <td class="kpi">${i+1}</td>
+      <td>
+        <div class="ticker">${r.ticker||"—"}</div>
+        <div class="company">${r.company||""}</div>
+        <div style="margin-top:8px">${ssTag}${trTag}${boTag}</div>
+      </td>
+      <td class="muted">${r.sector||"—"}</td>
+      <td><span class="score"><span>${fmt(r.composite,2)}</span><span class="bar"><span style="width:${Math.max(0,Math.min(100,Number(r.composite)||0))}%"></span></span></span></td>
+      <td class="kpi">${fmt(r.valuation,1)}</td>
+      <td class="kpi">${Number.isFinite(ss)?ss:"—"}</td>
+      <td class="muted">${r.tr_consensus || r.consensus || "—"}</td>
+      <td class="kpi">${fmt(r.pe,1)}</td>
+      <td class="kpi">${pct(r.perf_12m,1)}</td>
+      <td class="kpi">${fmt(r.breakout_score,0)}</td>
+    </tr>`;
+  }).join("");
+}
+
 async function loadData(){
   try{
-    const res = await fetch("sp500_data.json?v="+Date.now());
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    const json = await res.json();
+    const r=await fetch("sp500_data.json?v="+Date.now(), {cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const json=await r.json();
+    const rows = Array.isArray(json) ? json : (json.data || []);
+    if(!Array.isArray(rows)) throw new Error("Unexpected JSON structure");
+    allData = rows;
 
-    const rows = Array.isArray(json) ? json : json.data;
-    if(!Array.isArray(rows)) throw new Error("JSON structure unexpected");
+    const gen = (json && json.generated) ? json.generated : "";
+    document.getElementById("lastUpdated").innerHTML = `<span class="live-dot"></span>${gen}`;
 
-    document.getElementById("lastUpdated").textContent =
-      "Generated: " + (json.generated || "N/A");
-
-    const tbody = document.querySelector("#tbl tbody");
-    tbody.innerHTML = rows.slice(0,100).map((r,i)=>`
-      <tr>
-        <td>${i+1}</td>
-        <td>${r.ticker||""}</td>
-        <td>${r.company||""}</td>
-        <td>${r.composite??""}</td>
-        <td>${r.valuation??""}</td>
-        <td>${r.tr_smartscore??r.smartscore??""}</td>
-      </tr>
-    `).join("");
-
-    document.getElementById("status").style.display="none";
-    document.getElementById("tbl").style.display="table";
-  }
-  catch(e){
-    console.error(e);
-    document.getElementById("status").style.display="none";
-    const err=document.getElementById("error");
-    err.style.display="block";
-    err.textContent="ERROR: "+e.message;
+    document.getElementById("loading").style.display="none";
+    document.getElementById("statsBar").style.display="grid";
+    document.getElementById("controls").style.display="flex";
+    document.getElementById("viewTabs").style.display="flex";
+    applyI18n();
+    render();
+  }catch(e){
+    console.error("loadData error:", e);
+    document.getElementById("loading").style.display="none";
+    document.getElementById("error-msg").style.display="block";
+    const em=document.getElementById("error-msg");
+    em.innerHTML = `<div style="font-weight:900; margin-bottom:8px;">Could not load market data.</div>
+                    <div class="muted small">Error: ${String(e.message||e)}</div>
+                    <div class="muted small">Try opening sp500_data.json directly. If it opens, check Console for JS errors.</div>`;
   }
 }
 
