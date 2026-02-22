@@ -65,7 +65,7 @@ CFG = {
 }
 assert abs(sum(CFG["weights"].values()) - 1.0) < 1e-6, "Weights must sum to 1.0"
 
-CACHE_FILE = "sp500_cache_v5.pkl"
+CACHE_FILE = "sp500_cache_v6.pkl"
 
 
 # ════════════════════════════════════════════════════════════
@@ -1062,54 +1062,16 @@ def _print_summary(df: pd.DataFrame):
 def merge_breakout_signals(df: pd.DataFrame) -> pd.DataFrame:
     import json as _json, os as _os
     bp = "breakout_signals.json"
-
-    # Ensure columns exist no matter what (keeps UI stable)
-    base_cols = [
-        "breakout_score","breakout_rank","breakout_phase","breakout_rr","breakout_rs",
-        "breakout_stop","breakout_entry","has_vcp","vcp_quality","breakout_entry_quality","breakout_reasons"
-    ]
-    for c in base_cols:
-        if c not in df.columns:
-            df[c] = np.nan
-    df["has_vcp"] = df.get("has_vcp", False)
-
     if not _os.path.exists(bp):
         print("  ⚠  breakout_signals.json not found — skipping breakout merge")
+        for col in ["breakout_score","breakout_rank","breakout_phase","breakout_rr",
+                    "breakout_rs","breakout_stop","has_vcp","vcp_quality",
+                    "breakout_entry_quality","breakout_reasons"]:
+            df[col] = np.nan
         df["has_vcp"] = False
         df["breakout_entry_quality"] = ""
         df["breakout_reasons"] = ""
         return df
-
-    with open(bp, encoding="utf-8") as f:
-        data = _json.load(f)
-
-    # Expected structure from MOZES_stock-screener convert_scan_to_json.py
-    signals = {str(s.get("ticker","")).upper(): s for s in data.get("top_signals", [])}
-    print(f"  ✅ Loaded {len(signals)} breakout signals (scan: {data.get('scan_date','')})")
-
-    def _get(ticker, field, default=np.nan):
-        t = str(ticker).upper()
-        return signals.get(t, {}).get(field, default)
-
-    # Normalize tickers to uppercase for join
-    tickers_upper = df["ticker"].astype(str).str.upper()
-
-    df["breakout_score"]         = tickers_upper.apply(lambda t: _get(t, "breakout_score"))
-    df["breakout_rank"]          = tickers_upper.apply(lambda t: _get(t, "rank"))
-    df["breakout_phase"]         = tickers_upper.apply(lambda t: _get(t, "phase"))
-    df["breakout_rr"]            = tickers_upper.apply(lambda t: _get(t, "risk_reward"))
-    df["breakout_rs"]            = tickers_upper.apply(lambda t: _get(t, "rs"))
-    df["breakout_stop"]          = tickers_upper.apply(lambda t: _get(t, "stop_loss"))
-    df["breakout_entry"]         = tickers_upper.apply(lambda t: _get(t, "breakout_price"))
-
-    df["has_vcp"]                = tickers_upper.apply(lambda t: bool(signals.get(t, {}).get("has_vcp", False)))
-    df["vcp_quality"]            = tickers_upper.apply(lambda t: _get(t, "vcp_quality"))
-    df["breakout_entry_quality"] = tickers_upper.apply(lambda t: str(signals.get(t, {}).get("entry_quality", "") or ""))
-    df["breakout_reasons"]       = tickers_upper.apply(lambda t: " | ".join(signals.get(t, {}).get("reasons", []) or []))
-
-    n_overlap = pd.Series(df["breakout_score"]).notna().sum()
-    print(f"  🔀 Overlap with S&P 500: {n_overlap} stocks in both systems")
-    return df
 
     with open(bp, encoding="utf-8") as f:
         data = _json.load(f)
