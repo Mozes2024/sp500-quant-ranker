@@ -547,6 +547,7 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     # 5. FCF Quality
     df["s_fcf_yield"] = sector_percentile(df, "fcf_yield",  True)
     df["s_fcf_ni"]    = sector_percentile(df, "fcf_to_ni",  True)
+    df["s_fcf_m"]     = sector_percentile(df, "fcf_margin", True)   # FIX: re-added here (was removed from growth to avoid double-count, but still belongs in FCF pillar)
     df["pillar_fcf"]  = df[["s_fcf_yield","s_fcf_ni","s_fcf_m"]].mean(axis=1, skipna=True)
 
     # 6. Financial Health — added beta (low volatility = financial stability signal)
