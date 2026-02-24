@@ -175,7 +175,7 @@ tbody tr.breakout-only-row:hover{background:rgba(0,212,170,.04);}
 <header>
   <div class="logo-block">
     <div class="logo-title">S&amp;P 500 <span class="logo-accent">Mozes</span> Ranker</div>
-    <div class="logo-sub">v5.3 · 9-Pillar + Breakout Scanner</div>
+    <div class="logo-sub">v5.4 · 10-Pillar + Breakout Scanner</div>
   </div>
   <div class="header-right">
     <div class="last-updated" id="lastUpdated"><span class="live-dot"></span>Loading...</div>
@@ -379,8 +379,18 @@ function renderTable(){
     th.addEventListener('mouseenter',()=>{const tip=th.querySelector('.th-tip');if(!tip)return;const rect=th.getBoundingClientRect();tip.style.top=Math.max(8,rect.top-tip.offsetHeight-8)+'px';tip.style.left=Math.min(rect.left+rect.width/2-115,window.innerWidth-240)+'px';});
     th.addEventListener('click',()=>{const col=th.dataset.col;if(sortCol===col)sortAsc=!sortAsc;else{sortCol=col;sortAsc=['rank','ticker','company','sector'].includes(col);}renderTable();});
   });
-  // Breakout tab regime banner
   const tbody=document.getElementById('tableBody');tbody.innerHTML='';
+  const hasRsData=allData.some(d=>valid(d.rs_12m)||valid(d.p_rs));
+  if(currentView==='vsmarket'&&!hasRsData){
+    const bannerRow=document.createElement('tr');
+    bannerRow.innerHTML=`<td colspan="99" style="padding:24px 28px;text-align:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:520px;margin:0 auto">
+        <div style="font-size:13px;font-weight:700;color:var(--text2);margin-bottom:8px">📈 No Relative Strength data in this dataset</div>
+        <div style="font-size:12px;color:var(--text3);line-height:1.5">The ranking file was generated before the 10-pillar update. Run the ranking pipeline (GitHub Actions or <code style="background:var(--bg);padding:2px 6px;border-radius:4px">python sp500_github.py</code>) so the new JSON includes RS vs SPY. Then refresh this page.</div>
+      </div>
+    </td>`;
+    tbody.appendChild(bannerRow);
+  }
   if(currentView==='breakout'&&breakoutMeta){
     const regime=breakoutMeta.market_regime||'';
     const isRiskOn=regime.toUpperCase().includes('RISK-ON');
