@@ -67,7 +67,7 @@ CFG = {
 }
 assert abs(sum(CFG["weights"].values()) - 1.0) < 1e-6, "Weights must sum to 1.0"
 
-CACHE_FILE = "sp500_cache_v8.pkl"
+CACHE_FILE = "sp500_cache_v9.pkl"  # bumped v8→v9: full Piotroski (9 criteria) + sector-aware Altman Z
 
 
 # ════════════════════════════════════════════════════════════
