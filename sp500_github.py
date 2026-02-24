@@ -67,7 +67,7 @@ CFG = {
 }
 assert abs(sum(CFG["weights"].values()) - 1.0) < 1e-6, "Weights must sum to 1.0"
 
-CACHE_FILE = "sp500_cache_v9.pkl"  # bumped v8→v9: full Piotroski (9 criteria) + sector-aware Altman Z
+CACHE_FILE = "sp500_cache_v10.pkl"  # bumped v9→v10: earnings revisions (eps_revisions + eps_trend from Yahoo)
 
 
 # ════════════════════════════════════════════════════════════
@@ -271,8 +271,59 @@ FUNDAMENTAL_FIELDS = [
 
 def _get_one(ticker: str) -> tuple:
     try:
-        info = yf.Ticker(ticker).info
-        return ticker, {k: info.get(k) for k in FUNDAMENTAL_FIELDS}
+        t_obj = yf.Ticker(ticker)
+        info  = t_obj.info
+        data  = {k: info.get(k) for k in FUNDAMENTAL_FIELDS}
+
+        # ── Earnings Revisions (Step 2) ──────────────────────────────
+        # eps_revisions: Up/Down analyst count → revision breadth
+        # eps_trend:     consensus EPS change over time → revision magnitude
+        try:
+            rev = t_obj.eps_revisions
+            if rev is not None and not rev.empty:
+                # Prefer "Current Year" column, fallback to "Next Quarter"
+                col = "Current Year" if "Current Year" in rev.columns else (
+                      "Next Quarter" if "Next Quarter" in rev.columns else
+                      (rev.columns[0] if len(rev.columns) > 0 else None))
+                if col is not None:
+                    up30   = _safe(rev.at["Up Last 30 Days",   col] if "Up Last 30 Days"   in rev.index else np.nan, 0)
+                    down30 = _safe(rev.at["Down Last 30 Days", col] if "Down Last 30 Days" in rev.index else np.nan, 0)
+                    up7    = _safe(rev.at["Up Last 7 Days",    col] if "Up Last 7 Days"    in rev.index else np.nan, 0)
+                    down7  = _safe(rev.at["Down Last 7 Days",  col] if "Down Last 7 Days"  in rev.index else np.nan, 0)
+                    total30 = up30 + down30
+                    total7  = up7  + down7
+                    data["rev_up30"]    = up30
+                    data["rev_down30"]  = down30
+                    data["rev_up7"]     = up7
+                    data["rev_down7"]   = down7
+                    # Revision ratio: +1 = all up, -1 = all down, 0 = balanced
+                    data["rev_ratio_30d"] = (up30 - down30) / total30 if total30 > 0 else np.nan
+                    data["rev_ratio_7d"]  = (up7  - down7)  / total7  if total7  > 0 else np.nan
+        except Exception:
+            pass  # graceful — no revision data for this ticker
+
+        try:
+            trend = t_obj.eps_trend
+            if trend is not None and not trend.empty:
+                col = "Current Year" if "Current Year" in trend.columns else (
+                      "Next Quarter" if "Next Quarter" in trend.columns else
+                      (trend.columns[0] if len(trend.columns) > 0 else None))
+                if col is not None:
+                    current = _safe(trend.at["Current Estimate", col] if "Current Estimate" in trend.index else np.nan)
+                    ago_90  = _safe(trend.at["90 Days Ago",      col] if "90 Days Ago"      in trend.index else np.nan)
+                    ago_30  = _safe(trend.at["30 Days Ago",      col] if "30 Days Ago"      in trend.index else np.nan)
+                    data["eps_est_current"] = current
+                    data["eps_est_90d_ago"] = ago_90
+                    data["eps_est_30d_ago"] = ago_30
+                    # % change in consensus EPS over 90 days
+                    if not np.isnan(current) and not np.isnan(ago_90) and abs(ago_90) > 0.01:
+                        data["eps_revision_pct_90d"] = (current - ago_90) / abs(ago_90)
+                    if not np.isnan(current) and not np.isnan(ago_30) and abs(ago_30) > 0.01:
+                        data["eps_revision_pct_30d"] = (current - ago_30) / abs(ago_30)
+        except Exception:
+            pass  # graceful — no trend data for this ticker
+
+        return ticker, data
     except Exception:
         return ticker, {}
 
@@ -630,6 +681,46 @@ def compute_tr_pt_upside(row: pd.Series) -> float:
     return (t / c - 1) if (t and c and c > 0) else np.nan
 
 
+def compute_earnings_revision_score(row: pd.Series) -> float:
+    """
+    Earnings Revision Score (0–5):
+    Combines two signals:
+    1. Revision breadth  — ratio of up-revisions vs down-revisions (30-day)
+    2. Revision magnitude — % change in consensus EPS over 90 days
+    3. Recent acceleration — 7-day ratio as a bonus for very recent momentum
+
+    Research basis: Zacks (1979), Chan/Jegadeesh/Lakonishok (1996) —
+    earnings revisions are one of the strongest short-term alpha factors.
+    """
+    score = 0.0
+    try:
+        # Signal 1: Revision breadth (30-day) — core signal
+        ratio_30d = _safe(row.get("rev_ratio_30d"))
+        if not np.isnan(ratio_30d):
+            if ratio_30d > 0.6:    score += 2.0   # strong net upgrades
+            elif ratio_30d > 0.2:  score += 1.5   # moderate net upgrades
+            elif ratio_30d > 0:    score += 1.0   # slight net upgrades
+            elif ratio_30d > -0.2: score += 0.5   # roughly balanced
+            # ratio_30d <= -0.2: no points (net downgrades)
+
+        # Signal 2: EPS estimate change over 90 days — magnitude
+        eps_chg_90 = _safe(row.get("eps_revision_pct_90d"))
+        if not np.isnan(eps_chg_90):
+            if eps_chg_90 > 0.05:    score += 1.5   # estimates up >5%
+            elif eps_chg_90 > 0.02:  score += 1.0   # estimates up >2%
+            elif eps_chg_90 > 0:     score += 0.5   # any positive revision
+            elif eps_chg_90 < -0.05: score -= 0.5   # significant downgrade penalty
+
+        # Signal 3: Recent acceleration (7-day ratio) — bonus
+        ratio_7d = _safe(row.get("rev_ratio_7d"))
+        if not np.isnan(ratio_7d) and ratio_7d > 0.5:
+            score += 0.5   # very recent upgrade momentum
+
+    except Exception:
+        pass
+    return float(np.clip(score, 0, 5))
+
+
 # ════════════════════════════════════════════════════════════
 #  DYNAMIC SECTOR THRESHOLDS
 # ════════════════════════════════════════════════════════════
@@ -713,11 +804,13 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["pillar_profitability"] = df[["s_roe","s_roa","s_roic","s_pm","s_tr_roe"]].mean(axis=1, skipna=True)
 
     # 3. Growth — fcf_margin removed (already in FCF pillar); replaced with fcf_to_ni as growth quality signal
-    df["s_rev_g"]      = sector_percentile(df, "revenueGrowth",   True)
-    df["s_earn_g"]     = sector_percentile(df, "earningsGrowth",  True)
-    df["s_fcf_ni_g"]   = sector_percentile(df, "fcf_to_ni",       True)   # FIX: FCF/NI replaces fcf_margin (measures earning conversion quality, not double-counted)
-    df["s_tr_asset_g"] = sector_percentile(df, "tr_asset_growth", False)  # FIX: high asset growth → lower future returns (Titman et al. 2004)
-    df["pillar_growth"] = df[["s_rev_g","s_earn_g","s_fcf_ni_g","s_tr_asset_g"]].mean(axis=1, skipna=True)
+    #            + earnings revision score (Zacks-style signal: consensus EPS revisions)
+    df["s_rev_g"]      = sector_percentile(df, "revenueGrowth",            True)
+    df["s_earn_g"]     = sector_percentile(df, "earningsGrowth",           True)
+    df["s_fcf_ni_g"]   = sector_percentile(df, "fcf_to_ni",               True)   # FIX: FCF/NI replaces fcf_margin (measures earning conversion quality, not double-counted)
+    df["s_tr_asset_g"] = sector_percentile(df, "tr_asset_growth",          False)  # FIX: high asset growth → lower future returns (Titman et al. 2004)
+    df["s_earn_rev"]   = sector_percentile(df, "earnings_revision_score",  True)   # Step 2: analyst revision breadth + magnitude
+    df["pillar_growth"] = df[["s_rev_g","s_earn_g","s_fcf_ni_g","s_tr_asset_g","s_earn_rev"]].mean(axis=1, skipna=True)
 
     # 4. Earnings Quality
     df["s_eq"] = sector_percentile(df, "earnings_quality_score", True)
@@ -858,6 +951,7 @@ CORE_METRIC_COLS = [
     "freeCashflow", "altman_z", "piotroski_score", "beta",
     "recommendationMean", "fcf_yield", "tr_smart_score",
     "earnings_quality_score", "momentum_composite",
+    "earnings_revision_score",
 ]
 
 
@@ -947,6 +1041,7 @@ EXPORT_COLS = [
     "revenueGrowth", "earningsGrowth",
     "fcf_yield", "fcf_margin", "fcf_to_ni",
     "earnings_quality_score",
+    "earnings_revision_score", "rev_ratio_30d", "eps_revision_pct_90d",
     "currentRatio", "debtToEquity",
     "dividendYield", "payoutRatio", "beta",
     "perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite",
@@ -1010,6 +1105,9 @@ FRIENDLY_NAMES = {
     "fcf_margin":              "FCF Margin %",
     "fcf_to_ni":               "FCF/Net Income",
     "earnings_quality_score":  "Earnings Quality (0-5)",
+    "earnings_revision_score": "Earnings Revision (0-5)",
+    "rev_ratio_30d":           "Rev Ratio 30D (-1 to +1)",
+    "eps_revision_pct_90d":    "EPS Est. Chg 90D %",
     "currentRatio":            "Current Ratio",
     "debtToEquity":            "Debt/Equity",
     "dividendYield":           "Div Yield %",
@@ -1052,6 +1150,7 @@ PCT_COLS_FRACTION = {
     "tr_momentum_12m", "tr_roe", "tr_asset_growth", "tr_pt_upside",
     "perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite",
     "rs_12m", "rs_6m", "rs_3m", "rs_1m", "rs_composite",
+    "eps_revision_pct_90d",
 }
 
 ALL_PCT_COLS = PCT_COLS_DECIMAL | PCT_COLS_FRACTION
@@ -1253,7 +1352,8 @@ def _print_summary(df: pd.DataFrame):
     print("=" * 65)
     show = ["rank","ticker","name","sector","composite_score",
             "valuation_score","tr_smart_score","tr_analyst_consensus",
-            "earnings_quality_score","piotroski_score","altman_z","coverage"]
+            "earnings_quality_score","earnings_revision_score",
+            "piotroski_score","altman_z","coverage"]
     print(df[[c for c in show if c in df.columns]].head(20).to_string(index=False))
 
     print("\n  SECTOR MEDIAN COMPOSITE SCORES")
@@ -1376,6 +1476,10 @@ def export_json(df: pd.DataFrame):
             # Growth  (0-1 fraction → ×100)
             "rev_growth":     pct(row.get("revenueGrowth")),
             "eps_growth":     pct(row.get("earningsGrowth")),
+            # Earnings Revisions
+            "earn_rev_score": safe(row.get("earnings_revision_score")),
+            "rev_ratio_30d":  safe(row.get("rev_ratio_30d")),
+            "eps_rev_90d":    pct(row.get("eps_revision_pct_90d")),
             # FCF  (0-1 fraction → ×100)
             "fcf_yield":      pct(row.get("fcf_yield")),
             "fcf_margin":     pct(row.get("fcf_margin")),
@@ -1505,6 +1609,7 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
         df["pt_upside"]              = df.apply(compute_pt_upside,        axis=1)
         df["tr_pt_upside"]           = df.apply(compute_tr_pt_upside,     axis=1)
         df["earnings_quality_score"] = df.apply(compute_earnings_quality, axis=1)
+        df["earnings_revision_score"] = df.apply(compute_earnings_revision_score, axis=1)
 
         # Clip financial outliers (negative equity → crazy ROE, tiny mktcap → crazy FCF yield)
         df["returnOnEquity"] = df["returnOnEquity"].clip(-2.0, 5.0)
