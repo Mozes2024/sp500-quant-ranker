@@ -348,10 +348,10 @@ def add_price_momentum(df: pd.DataFrame, tickers: list) -> pd.DataFrame:
     spy_6m  = spy.get("6m",  np.nan)
     spy_3m  = spy.get("3m",  np.nan)
     spy_1m  = spy.get("1m",  np.nan)
-    df["rs_12m"] = (df["perf_12m"] - spy_12m) if not np.isnan(spy_12m) else np.nan
-    df["rs_6m"]  = (df["perf_6m"]  - spy_6m)  if not np.isnan(spy_6m)  else np.nan
-    df["rs_3m"]  = (df["perf_3m"]  - spy_3m)  if not np.isnan(spy_3m)  else np.nan
-    df["rs_1m"]  = (df["perf_1m"]  - spy_1m)  if not np.isnan(spy_1m)  else np.nan
+    df["rs_12m"] = df["perf_12m"] - spy_12m
+    df["rs_6m"]  = df["perf_6m"]  - spy_6m
+    df["rs_3m"]  = df["perf_3m"]  - spy_3m
+    df["rs_1m"]  = df["perf_1m"]  - spy_1m
     df["rs_composite"] = (
         0.50 * df["rs_12m"].fillna(0) + 0.30 * df["rs_6m"].fillna(0) +
         0.15 * df["rs_3m"].fillna(0)  + 0.05 * df["rs_1m"].fillna(0)
