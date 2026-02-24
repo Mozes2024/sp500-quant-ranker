@@ -36,14 +36,14 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # Cache v8: no v8 cache exists yet, so next run does full rebuild (incl. RS vs SPY). Then future runs use v8.
-      - name: Restore S&P 500 cache (v8, 7 days)
+      # Cache v9: no v8 cache exists yet, so next run does full rebuild (incl. RS vs SPY). Then future runs use v8.
+      - name: Restore S&P 500 cache (v9, 7 days)
         uses: actions/cache@v4
         with:
-          path: sp500_cache_v8.pkl
-          key: sp500-cache-v8-${{ runner.os }}-${{ github.run_id }}
+          path: sp500_cache_v9.pkl
+          key: sp500-cache-v9-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            sp500-cache-v8-${{ runner.os }}-
+            sp500-cache-v9-${{ runner.os }}-
 
       - name: Ensure breakout_signals.json exists (from screener)
         run: |
