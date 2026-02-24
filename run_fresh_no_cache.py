@@ -2,7 +2,7 @@
 import os
 import sys
 
-CACHE_FILE = "sp500_cache_v8.pkl"
+CACHE_FILE = "sp500_cache_v10.pkl"
 if os.path.exists(CACHE_FILE):
     os.remove(CACHE_FILE)
     print(f"  Removed {CACHE_FILE} so this run does a full rebuild.")
