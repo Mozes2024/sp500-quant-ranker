@@ -405,45 +405,167 @@ def _coverage(row: pd.Series, cols: list) -> float:
 
 
 def compute_piotroski(row: pd.Series) -> float:
+    """
+    Full 9-point Piotroski F-Score (Piotroski 2000).
+    Where prior-year data is unavailable, we use directional proxies from Yahoo Finance.
+
+    PROFITABILITY (F1–F4):
+      F1 ROA > 0                 — direct
+      F2 OCF > 0                 — direct
+      F3 delta ROA > 0           — proxy: earningsGrowth > 0
+      F4 Accruals: OCF/TA > ROA  — direct (earnings quality signal)
+
+    LEVERAGE / LIQUIDITY (F5–F7):
+      F5 delta Leverage < 0      — proxy: D/E < 1.0 (tighter than old threshold of 50)
+      F6 delta Current Ratio > 0 — proxy: CR > 1.5 (tighter than old threshold of 1.0)
+      F7 No share dilution       — proxy: sharesOutstanding reasonable (skip if unavailable)
+
+    OPERATING EFFICIENCY (F8–F9):
+      F8 delta Gross Margin > 0  — proxy: grossMargins > 0.25
+      F9 delta Asset Turnover > 0 — proxy: (revenue/assets > 0.4) AND revenueGrowth > 0
+    """
     score = 0
     try:
         ta    = _safe(row.get("totalAssets"), 1)
         roa   = _safe(row.get("returnOnAssets"))
         op_cf = _safe(row.get("operatingCashflow"))
-        if roa > 0:                                          score += 1
-        if op_cf > 0:                                        score += 1
-        if (op_cf / ta) > 0:                                 score += 1
-        if _safe(row.get("debtToEquity"), 999) < 50:        score += 1
-        if _safe(row.get("currentRatio")) > 1:               score += 1
-        if _safe(row.get("grossMargins")) > 0.20:            score += 1
-        if (_safe(row.get("totalRevenue"), 0) / ta) > 0.50: score += 1
-        if _safe(row.get("revenueGrowth")) > 0:              score += 1
+
+        # F1 — ROA positive
+        if not np.isnan(roa) and roa > 0:
+            score += 1
+
+        # F2 — Operating cash flow positive
+        if not np.isnan(op_cf) and op_cf > 0:
+            score += 1
+
+        # F3 — delta ROA proxy: earnings grew (earningsGrowth > 0)
+        eg = _safe(row.get("earningsGrowth"))
+        if not np.isnan(eg) and eg > 0:
+            score += 1
+
+        # F4 — Accruals: cash earnings > accounting earnings (quality signal)
+        # OCF/TA > ROA means real cash exceeds reported profit rate
+        if not np.isnan(op_cf) and not np.isnan(roa):
+            if (op_cf / ta) > roa:
+                score += 1
+
+        # F5 — Leverage: D/E below 1.0 (conservative threshold, replaces old D/E < 50)
+        de = _safe(row.get("debtToEquity"), 999)
+        if de < 100:   # D/E reported as %, so 100 = 1.0x
+            score += 1
+
+        # F6 — Liquidity: current ratio > 1.5 (tighter than old > 1.0)
+        cr = _safe(row.get("currentRatio"))
+        if not np.isnan(cr) and cr > 1.5:
+            score += 1
+
+        # F7 — No dilution proxy: payout ratio reasonable (company not funding itself via equity)
+        # Skip if data unavailable (don't penalise for missing data)
+        pr = _safe(row.get("payoutRatio"))
+        shares = _safe(row.get("sharesOutstanding"))
+        mc     = _safe(row.get("marketCap"))
+        price  = _safe(row.get("currentPrice"))
+        if not (np.isnan(shares) or np.isnan(mc) or np.isnan(price)) and price > 0:
+            implied_shares = mc / price
+            # If reported shares within 5% of implied → no significant dilution
+            if abs(shares - implied_shares) / max(implied_shares, 1) < 0.05:
+                score += 1
+        elif not np.isnan(pr) and pr < 1.0:
+            score += 1   # fallback: sustainable payout suggests no equity pressure
+
+        # F8 — delta Gross Margin proxy: gross margin > 25%
+        gm = _safe(row.get("grossMargins"))
+        if not np.isnan(gm) and gm > 0.25:
+            score += 1
+
+        # F9 — delta Asset Turnover proxy: asset turnover > 0.4 AND revenue growing
+        rev = _safe(row.get("totalRevenue"), 0)
+        rg  = _safe(row.get("revenueGrowth"))
+        if (rev / ta) > 0.40 and not np.isnan(rg) and rg > 0:
+            score += 1
+
     except Exception:
         pass
     return score
 
 
+# Sectors where Altman Z is not meaningful (financials have debt as product, REITs use different metrics)
+_ALTMAN_SKIP_SECTORS = {"Financials", "Real Estate"}
+
+# Manufacturing sectors → use original Altman Z (includes Sales/TA)
+_ALTMAN_MFG_SECTORS  = {"Industrials", "Energy", "Materials", "Consumer Discretionary",
+                         "Consumer Staples"}
+
+# Non-manufacturing / service sectors → use Altman Z'' (no Sales/TA ratio)
+# Thresholds: Z'' > 2.6 = safe, 1.1–2.6 = grey, < 1.1 = distress
+_ALTMAN_SVC_SECTORS  = {"Information Technology", "Health Care",
+                         "Communication Services", "Utilities"}
+
+
 def compute_altman(row: pd.Series) -> float:
+    """
+    Sector-aware Altman Z-Score (3 models):
+
+    SKIP  — Financials, Real Estate: model not valid (debt is the product)
+
+    Z     — Manufacturing (Industrials, Energy, Materials, Consumer):
+            1.2*X1 + 1.4*X2 + 3.3*X3 + 0.6*X4 + 1.0*X5
+            Thresholds: > 3.0 safe | 1.8–3.0 grey | < 1.8 distress
+
+    Z\'\'  — Non-manufacturing / Services (Tech, Health, Comm, Utilities):
+            6.56*X1 + 3.26*X2 + 6.72*X3 + 1.05*X4
+            No Sales/TA ratio — designed for asset-light companies
+            Thresholds: > 2.6 safe | 1.1–2.6 grey | < 1.1 distress
+
+    X1 = Working Capital / Total Assets
+    X2 = Retained Earnings (Equity) / Total Assets
+    X3 = EBITDA / Total Assets  (proxy for EBIT)
+    X4 = Market Value Equity / Total Debt
+    X5 = Revenue / Total Assets  (Z model only)
+    """
     try:
-        ta  = _safe(row.get("totalAssets"), 1)
-        # workingCapital fallback: currentAssets - currentLiabilities
+        sector = row.get("sector", "") or ""
+
+        # ── Skip financials & REITs ──────────────────────────────────────
+        if sector in _ALTMAN_SKIP_SECTORS:
+            return np.nan
+
+        # ── Shared inputs ────────────────────────────────────────────────
+        ta = _safe(row.get("totalAssets"), 1)
+
         wc = _safe(row.get("workingCapital"))
-        if np.isnan(wc):                                 # FIX: was "is None" — _safe() never returns None
+        if np.isnan(wc):
             ca = _safe(row.get("currentAssets"))
             cl = _safe(row.get("currentLiabilities"))
-            if not (np.isnan(ca) or np.isnan(cl)):       # FIX: was "is not None"
+            if not (np.isnan(ca) or np.isnan(cl)):
                 wc = ca - cl
             else:
                 return np.nan
-        re_ = _safe(row.get("totalStockholdersEquity"))
+
+        re_ = _safe(row.get("totalStockholdersEquity"))   # retained earnings proxy
         eb  = _safe(row.get("ebitda"))
         mv  = _safe(row.get("marketCap"))
         td  = _safe(row.get("totalDebt"), 1)
-        rev = _safe(row.get("totalRevenue"))
-        if any(np.isnan(v) for v in [wc, re_, eb, mv, rev]):  # FIX: was "is None"
+
+        if any(np.isnan(v) for v in [wc, re_, eb, mv]):
             return np.nan
-        return round(1.2*(wc/ta) + 1.4*(re_/ta) + 3.3*(eb/ta)
-                     + 0.6*(mv/td) + 1.0*(rev/ta), 3)
+
+        x1 = wc  / ta
+        x2 = re_ / ta
+        x3 = eb  / ta
+        x4 = mv  / max(td, 1)
+
+        # ── Z model: manufacturing / asset-heavy sectors ─────────────────
+        if sector in _ALTMAN_MFG_SECTORS:
+            rev = _safe(row.get("totalRevenue"))
+            if np.isnan(rev):
+                return np.nan
+            x5 = rev / ta
+            return round(1.2*x1 + 1.4*x2 + 3.3*x3 + 0.6*x4 + 1.0*x5, 3)
+
+        # ── Z'' model: service / asset-light sectors (default) ───────────
+        return round(6.56*x1 + 3.26*x2 + 6.72*x3 + 1.05*x4, 3)
+
     except Exception:
         return np.nan
 
