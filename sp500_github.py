@@ -44,17 +44,19 @@ os.makedirs("artifacts", exist_ok=True)
 # ════════════════════════════════════════════════════════════
 CFG = {
     "weights": {
-        "valuation":        0.15,   # reduced: 0.19→0.15 (Value alone = value trap risk)
-        "profitability":    0.18,   # increased: 0.16→0.18 (strongest academic quality factor)
-        "growth":           0.13,
-        "earnings_quality": 0.09,   # slightly increased: 0.08→0.09
-        "fcf_quality":      0.13,
-        "financial_health": 0.10,   # increased: 0.09→0.10 (now includes beta/low-vol)
-        "momentum":         0.12,   # increased: 0.09→0.12 (strong, persistent factor per Jegadeesh & Titman)
-        "analyst":          0.08,   # reduced: 0.11→0.08 (sentiment is lagging indicator)
-        "piotroski":        0.02,
+        "valuation":         0.15,
+        "profitability":     0.18,
+        "growth":            0.13,
+        "earnings_quality":  0.09,
+        "fcf_quality":       0.13,
+        "financial_health":  0.10,
+        "momentum":          0.07,   # reduced to make room for relative_strength
+        "relative_strength": 0.08,   # excess return vs SPY (Minervini-style RS)
+        "analyst":           0.04,   # reduced
+        "piotroski":         0.02,
     },
     "min_coverage":    0.45,
+    "coverage_composite_min": 0.5,   # composite = raw * (this + (1-this)*coverage); 0.5 = 50% floor at 0% coverage
     "min_market_cap":  5_000_000_000,
     "min_avg_volume":  500_000,
     "cache_hours":     24,
@@ -297,10 +299,28 @@ def fetch_price_multi(tickers: list) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def fetch_spy_returns() -> dict:
+    """Fetch SPY 2y price and return 12m/6m/3m/1m returns (decimal)."""
+    try:
+        raw = yf.download("SPY", period="2y", auto_adjust=True, progress=False, threads=False)
+        if raw.empty or "Close" not in raw.columns:
+            return {}
+        s = raw["Close"].dropna()
+        if len(s) < 21:
+            return {}
+        out = {}
+        for n_days, key in [(252, "12m"), (126, "6m"), (63, "3m"), (21, "1m")]:
+            out[key] = (s.iloc[-1] / s.iloc[-n_days] - 1) if len(s) >= n_days else np.nan
+        return out
+    except Exception:
+        return {}
+
+
 def add_price_momentum(df: pd.DataFrame, tickers: list) -> pd.DataFrame:
     prices = fetch_price_multi(tickers)
     if prices.empty:
-        for col in ["perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite"]:
+        for col in ["perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite",
+                    "rs_12m", "rs_6m", "rs_3m", "rs_1m", "rs_composite"]:
             df[col] = np.nan
         return df
 
@@ -323,8 +343,25 @@ def add_price_momentum(df: pd.DataFrame, tickers: list) -> pd.DataFrame:
     all_nan = df[["perf_12m", "perf_6m", "perf_3m", "perf_1m"]].isna().all(axis=1)
     df.loc[all_nan, "momentum_composite"] = np.nan
 
-    # Clip extreme outliers (splits, data errors)
+    spy = fetch_spy_returns()
+    spy_12m = spy.get("12m", np.nan)
+    spy_6m  = spy.get("6m",  np.nan)
+    spy_3m  = spy.get("3m",  np.nan)
+    spy_1m  = spy.get("1m",  np.nan)
+    df["rs_12m"] = (df["perf_12m"] - spy_12m) if not np.isnan(spy_12m) else np.nan
+    df["rs_6m"]  = (df["perf_6m"]  - spy_6m)  if not np.isnan(spy_6m)  else np.nan
+    df["rs_3m"]  = (df["perf_3m"]  - spy_3m)  if not np.isnan(spy_3m)  else np.nan
+    df["rs_1m"]  = (df["perf_1m"]  - spy_1m)  if not np.isnan(spy_1m)  else np.nan
+    df["rs_composite"] = (
+        0.50 * df["rs_12m"].fillna(0) + 0.30 * df["rs_6m"].fillna(0) +
+        0.15 * df["rs_3m"].fillna(0)  + 0.05 * df["rs_1m"].fillna(0)
+    )
+    rs_all_nan = df[["rs_12m", "rs_6m", "rs_3m", "rs_1m"]].isna().all(axis=1)
+    df.loc[rs_all_nan, "rs_composite"] = np.nan
+
     for col in ["perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite"]:
+        df[col] = df[col].clip(-0.80, 5.0)
+    for col in ["rs_12m", "rs_6m", "rs_3m", "rs_1m", "rs_composite"]:
         df[col] = df[col].clip(-0.80, 5.0)
     return df
 
@@ -596,6 +633,12 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_piotroski"]      = sector_percentile(df, "piotroski_score", True)
     df["pillar_piotroski"] = df["s_piotroski"]
 
+    # 10. Relative strength vs market (excess return vs SPY)
+    df["s_rs_12m"] = sector_percentile(df, "rs_12m", True)
+    df["s_rs_6m"]  = sector_percentile(df, "rs_6m",  True)
+    df["s_rs_3m"]  = sector_percentile(df, "rs_3m",  True)
+    df["pillar_relative_strength"] = df[["s_rs_12m", "s_rs_6m", "s_rs_3m"]].mean(axis=1, skipna=True)
+
     return df
 
 
@@ -604,15 +647,16 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
 # ════════════════════════════════════════════════════════════
 
 PILLAR_MAP = {
-    "valuation":        "pillar_valuation",
-    "profitability":    "pillar_profitability",
-    "growth":           "pillar_growth",
-    "earnings_quality": "pillar_earnings_quality",
-    "fcf_quality":      "pillar_fcf",
-    "financial_health": "pillar_health",
-    "momentum":         "pillar_momentum",
-    "analyst":          "pillar_analyst",
-    "piotroski":        "pillar_piotroski",
+    "valuation":          "pillar_valuation",
+    "profitability":      "pillar_profitability",
+    "growth":             "pillar_growth",
+    "earnings_quality":   "pillar_earnings_quality",
+    "fcf_quality":        "pillar_fcf",
+    "financial_health":   "pillar_health",
+    "momentum":           "pillar_momentum",
+    "relative_strength":  "pillar_relative_strength",
+    "analyst":            "pillar_analyst",
+    "piotroski":          "pillar_piotroski",
 }
 
 
@@ -735,10 +779,10 @@ def save_cache(df: pd.DataFrame):
 
 EXPORT_COLS = [
     "rank", "ticker", "name", "sector", "industry",
-    "composite_score", "valuation_score",
+    "composite_score", "composite_raw", "valuation_score",
     "pillar_valuation", "pillar_profitability", "pillar_growth",
     "pillar_earnings_quality", "pillar_fcf", "pillar_health",
-    "pillar_momentum", "pillar_analyst", "pillar_piotroski",
+    "pillar_momentum", "pillar_relative_strength", "pillar_analyst", "pillar_piotroski",
     "coverage",
     "tr_smart_score", "tr_analyst_consensus", "tr_consensus_num",
     "tr_news_sentiment", "tr_news_bullish",
@@ -757,6 +801,7 @@ EXPORT_COLS = [
     "currentRatio", "debtToEquity",
     "dividendYield", "payoutRatio", "beta",
     "perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite",
+    "rs_12m", "rs_6m", "rs_3m", "rs_1m", "rs_composite",
     "altman_z", "piotroski_score",
     "recommendationMean", "numberOfAnalystOpinions", "pt_upside",
     "marketCap", "enterpriseValue", "currentPrice", "averageVolume",
@@ -767,6 +812,7 @@ FRIENDLY_NAMES = {
     "rank": "Rank", "ticker": "Ticker", "name": "Company",
     "sector": "Sector", "industry": "Industry",
     "composite_score":         "Composite Score",
+    "composite_raw":           "Composite (raw, unweighted)",
     "valuation_score":         "Cheap/Expensive (1-100)",
     "pillar_valuation":        "Valuation",
     "pillar_profitability":    "Profitability",
@@ -775,6 +821,7 @@ FRIENDLY_NAMES = {
     "pillar_fcf":              "FCF Quality",
     "pillar_health":           "Financial Health",
     "pillar_momentum":         "Momentum",
+    "pillar_relative_strength": "Rel. Strength vs Market",
     "pillar_analyst":          "Analyst+Sentiment",
     "pillar_piotroski":        "Piotroski",
     "coverage":                "Data Coverage %",
@@ -824,6 +871,11 @@ FRIENDLY_NAMES = {
     "perf_3m":                 "Perf 3M %",
     "perf_1m":                 "Perf 1M %",
     "momentum_composite":      "Momentum Composite %",
+    "rs_12m":                  "RS vs SPY 12M %",
+    "rs_6m":                   "RS vs SPY 6M %",
+    "rs_3m":                   "RS vs SPY 3M %",
+    "rs_1m":                   "RS vs SPY 1M %",
+    "rs_composite":            "RS Composite %",
     "altman_z":                "Altman Z",
     "piotroski_score":         "Piotroski F",
     "recommendationMean":      "Yahoo Analyst (1=Buy)",
@@ -850,6 +902,7 @@ PCT_COLS_FRACTION = {
     "tr_investor_chg_30d", "tr_investor_chg_7d",
     "tr_momentum_12m", "tr_roe", "tr_asset_growth", "tr_pt_upside",
     "perf_12m", "perf_6m", "perf_3m", "perf_1m", "momentum_composite",
+    "rs_12m", "rs_6m", "rs_3m", "rs_1m", "rs_composite",
 }
 
 ALL_PCT_COLS = PCT_COLS_DECIMAL | PCT_COLS_FRACTION
@@ -1137,6 +1190,7 @@ def export_json(df: pd.DataFrame):
             "industry":       str(row.get("industry", "")),
             # Core scores
             "composite":      safe(row.get("composite_score")),
+            "composite_raw":  safe(row.get("composite_raw")),
             "valuation":      safe(row.get("valuation_score")),
             # Pillars
             "p_valuation":    safe(row.get("pillar_valuation")),
@@ -1187,6 +1241,12 @@ def export_json(df: pd.DataFrame):
             "perf_3m":        pct(row.get("perf_3m")),
             "perf_1m":        pct(row.get("perf_1m")),
             "momentum":       pct(row.get("momentum_composite")),
+            "rs_12m":         pct(row.get("rs_12m")),
+            "rs_6m":          pct(row.get("rs_6m")),
+            "rs_3m":          pct(row.get("rs_3m")),
+            "rs_1m":          pct(row.get("rs_1m")),
+            "rs_composite":   pct(row.get("rs_composite")),
+            "p_rs":           safe(row.get("pillar_relative_strength")),
             # Risk
             "altman_z":       safe(row.get("altman_z")),
             "piotroski_f":    safe(row.get("piotroski_score")),
@@ -1330,16 +1390,19 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
         print("\n[6/6]  Pillar scores...")
         df = build_pillar_scores(df)
 
-        # 11. Composite + valuation
+        # 11. Composite + valuation (raw composite; coverage weighting applied below)
         df["composite_score"] = df.apply(compute_composite,       axis=1)
         df["valuation_score"] = df.apply(compute_valuation_score, axis=1)
 
-        # 12. Rank + sector context
-        df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
-        df["rank"] = df.index + 1
-        df = add_sector_context(df)
-
         save_cache(df)
+
+    # 12. Coverage-weighted composite + rank + sector context (always, so cache and fresh runs match)
+    cmin = CFG.get("coverage_composite_min", 0.5)
+    df["composite_raw"] = df["composite_score"].copy()
+    df["composite_score"] = df["composite_score"] * (cmin + (1.0 - cmin) * df["coverage"].fillna(0))
+    df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
+    df["rank"] = df.index + 1
+    df = add_sector_context(df)
 
     # 13. Output
     _print_summary(df)
