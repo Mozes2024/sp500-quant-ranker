@@ -756,6 +756,9 @@ def load_cache() -> "pd.DataFrame | None":
                     pickle.dump((data, _SECTOR_THRESHOLDS, ts), fw)
             except Exception:
                 pass
+        if "rs_12m" not in data.columns or "pillar_relative_strength" not in data.columns:
+            print(f"  ℹ️  Cache missing 10-pillar columns (rs_12m, pillar_relative_strength) — full rebuild")
+            return None
         age = datetime.now() - ts
         if age < timedelta(hours=CFG["cache_hours"]):
             print(f"✅  Cache loaded ({int(age.total_seconds()//60)} min old)")
