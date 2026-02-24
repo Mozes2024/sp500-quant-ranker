@@ -67,7 +67,7 @@ CFG = {
 }
 assert abs(sum(CFG["weights"].values()) - 1.0) < 1e-6, "Weights must sum to 1.0"
 
-CACHE_FILE = "sp500_cache_v7.pkl"
+CACHE_FILE = "sp500_cache_v8.pkl"
 
 
 # ════════════════════════════════════════════════════════════
@@ -1293,10 +1293,10 @@ def export_json(df: pd.DataFrame):
     json_path = "artifacts/sp500_data.json"
     with open(json_path, "w") as f:
         _json.dump(payload, f, separators=(",", ":"))
-    # Also write to root for GitHub Pages
     with open("sp500_data.json", "w") as f:
         _json.dump(payload, f, separators=(",", ":"))
-    print(f"✅  JSON → {json_path}  ({len(records)} stocks)")
+    n_rs = sum(1 for r in records if r.get("rs_12m") is not None)
+    print(f"✅  JSON → {json_path}  ({len(records)} stocks, {n_rs} with RS vs SPY)")
 
 
 
