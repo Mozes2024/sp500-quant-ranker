@@ -44,16 +44,16 @@ os.makedirs("artifacts", exist_ok=True)
 # ════════════════════════════════════════════════════════════
 CFG = {
     "weights": {
-        "valuation":         0.15,
-        "profitability":     0.18,
-        "growth":            0.13,
-        "earnings_quality":  0.09,
-        "fcf_quality":       0.13,
-        "financial_health":  0.10,
-        "momentum":          0.08,   # reduced from 0.12 to make room for relative_strength
-        "relative_strength": 0.08,   # excess return vs SPY (Minervini-style RS)
-        "analyst":           0.04,   # reduced
-        "piotroski":         0.02,
+        "valuation":         0.16,   # was 0.15 — slight bump, core value signal
+        "profitability":     0.20,   # was 0.18 — absorbed Piotroski weight (most reliable pillar)
+        "growth":            0.14,   # was 0.13 — slight bump
+        "earnings_quality":  0.10,   # was 0.09 — critical for detecting accounting tricks
+        "fcf_quality":       0.13,   # unchanged
+        "financial_health":  0.10,   # unchanged
+        "momentum":          0.09,   # was 0.08 — includes short_ratio signal now
+        "relative_strength": 0.08,   # unchanged
+        "analyst":           0.00,   # was 0.04 — ZEROED: SmartScore has double-count risk; use as tiebreaker only
+        "piotroski":         0.00,   # was 0.02 — ZEROED: proxy-based F-Score without Y/Y data is noise, not signal
     },
     "min_coverage":    0.45,
     "coverage_composite_min": 0.5,   # composite = raw * (this + (1-this)*coverage); 0.5 = 50% floor at 0% coverage
@@ -821,14 +821,15 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_tr_roe"] = sector_percentile(df, "tr_roe",         True)
     df["pillar_profitability"] = df[["s_roe","s_roa","s_roic","s_pm","s_tr_roe"]].mean(axis=1, skipna=True)
 
-    # 3. Growth — fcf_margin removed (already in FCF pillar); replaced with fcf_to_ni as growth quality signal
+    # 3. Growth — fcf_to_ni REMOVED (was double-counted with FCF pillar)
+    #            replaced with eps_revision_pct_30d (short-term revision velocity, distinct from 90d in EQ)
     #            + earnings revision score (Zacks-style signal: consensus EPS revisions)
-    df["s_rev_g"]      = sector_percentile(df, "revenueGrowth",            True)
-    df["s_earn_g"]     = sector_percentile(df, "earningsGrowth",           True)
-    df["s_fcf_ni_g"]   = sector_percentile(df, "fcf_to_ni",               True)   # FIX: FCF/NI replaces fcf_margin (measures earning conversion quality, not double-counted)
-    df["s_tr_asset_g"] = sector_percentile(df, "tr_asset_growth",          False)  # FIX: high asset growth → lower future returns (Titman et al. 2004)
-    df["s_earn_rev"]   = sector_percentile(df, "earnings_revision_score",  True)   # Step 2: analyst revision breadth + magnitude
-    df["pillar_growth"] = df[["s_rev_g","s_earn_g","s_fcf_ni_g","s_tr_asset_g","s_earn_rev"]].mean(axis=1, skipna=True)
+    df["s_rev_g"]        = sector_percentile(df, "revenueGrowth",            True)
+    df["s_earn_g"]       = sector_percentile(df, "earningsGrowth",           True)
+    df["s_eps_rev_30d"]  = sector_percentile(df, "eps_revision_pct_30d",     True)   # FIX v5.3: replaces fcf_to_ni (was double-counted); short-term revision velocity
+    df["s_tr_asset_g"]   = sector_percentile(df, "tr_asset_growth",          False)  # high asset growth → lower future returns (Titman et al. 2004)
+    df["s_earn_rev"]     = sector_percentile(df, "earnings_revision_score",  True)   # analyst revision breadth + magnitude
+    df["pillar_growth"]  = df[["s_rev_g","s_earn_g","s_eps_rev_30d","s_tr_asset_g","s_earn_rev"]].mean(axis=1, skipna=True)
 
     # 4. Earnings Quality
     df["s_eq"] = sector_percentile(df, "earnings_quality_score", True)
@@ -847,35 +848,27 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_beta"]   = sector_percentile(df, "beta",         False)  # FIX: moved from momentum — low vol is a risk/health signal, not momentum
     df["pillar_health"] = df[["s_cr","s_de","s_altman","s_beta"]].mean(axis=1, skipna=True)
 
-    # 7. Momentum — beta removed; now a pure price-momentum pillar
-    df["s_mom"]      = sector_percentile(df, "momentum_composite", True)
-    df["s_tr_mom12"] = sector_percentile(df, "tr_momentum_12m",    True)
-    df["s_tr_sma"]   = sector_percentile(df, "tr_sma_num",         True)
-    df["pillar_momentum"] = df[["s_mom","s_tr_mom12","s_tr_sma"]].mean(axis=1, skipna=True)
+    # 7. Momentum — beta removed; now pure price-momentum + short squeeze signal
+    df["s_mom"]        = sector_percentile(df, "momentum_composite", True)
+    df["s_tr_mom12"]   = sector_percentile(df, "tr_momentum_12m",    True)
+    df["s_tr_sma"]     = sector_percentile(df, "tr_sma_num",         True)
+    df["s_short"]      = sector_percentile(df, "shortRatio",         False)  # FIX v5.3: low short ratio = bullish signal; high short = crowded trade risk
+    df["pillar_momentum"] = df[["s_mom","s_tr_mom12","s_tr_sma","s_short"]].mean(axis=1, skipna=True)
 
-    # 8. Analyst + TipRanks Sentiment — weighted combination
-    # SmartScore is itself an aggregation of many signals below → give it dominant weight
+    # 8. Analyst + TipRanks Sentiment
+    # FIX v5.3: SmartScore ALREADY aggregates consensus, insider, hedge fund, news sentiment.
+    # Counting them separately = double counting. New structure:
+    #   SmartScore 60% (covers all TR signals), PT Upside avg 25%, Yahoo Analyst 15%
     df["s_rec"]          = sector_percentile(df, "recommendationMean",   False)
     df["s_pt_upside"]    = sector_percentile(df, "pt_upside",            True)
     df["s_tr_smart"]     = sector_percentile(df, "tr_smart_score",       True)
-    df["s_tr_consensus"] = sector_percentile(df, "tr_consensus_num",     True)
-    df["s_tr_news"]      = sector_percentile(df, "tr_news_sent_num",     True)
-    df["s_tr_blogger"]   = sector_percentile(df, "tr_blogger_bullish",   True)
-    df["s_tr_hedge"]     = sector_percentile(df, "tr_hedge_trend_num",   True)
-    df["s_tr_insider"]   = sector_percentile(df, "tr_insider_trend_num", True)
-    df["s_tr_inv_chg"]   = sector_percentile(df, "tr_investor_chg_30d",  True)
     df["s_tr_pt"]        = sector_percentile(df, "tr_pt_upside",         True)
-    # FIX: weighted instead of equal — SmartScore 30%, consensus 20%, avg PT 20%, insider 15%, hedge 10%, news/blogger 2.5% each
-    # PT: average of Yahoo and TipRanks to avoid double-counting
+    # PT: average of Yahoo and TipRanks to avoid source bias
     s_pt_avg = df[["s_pt_upside","s_tr_pt"]].mean(axis=1, skipna=True)
     df["pillar_analyst"] = (
-        0.30 * df["s_tr_smart"].fillna(df["s_tr_smart"].median()) +
-        0.20 * df["s_tr_consensus"].fillna(df["s_rec"]) +
-        0.20 * s_pt_avg +
-        0.15 * df["s_tr_insider"].fillna(50) +
-        0.10 * df["s_tr_hedge"].fillna(50) +
-        0.025 * df["s_tr_news"].fillna(50) +
-        0.025 * df["s_tr_inv_chg"].fillna(50)
+        0.60 * df["s_tr_smart"].fillna(df["s_rec"]) +
+        0.25 * s_pt_avg +
+        0.15 * df["s_rec"].fillna(50)
     )
     # Rescale to 10–100 band (same as sector_percentile output)
     _min, _max = df["pillar_analyst"].min(), df["pillar_analyst"].max()
@@ -912,10 +905,28 @@ PILLAR_MAP = {
     "piotroski":          "pillar_piotroski",
 }
 
+# FIX v5.3: Fallback weights when TipRanks data is unavailable
+# Redistributes TR-dependent weight to pure-fundamental pillars
+CFG_WEIGHTS_NO_TR = {
+    "valuation":         0.20,
+    "profitability":     0.24,
+    "growth":            0.16,
+    "earnings_quality":  0.12,
+    "fcf_quality":       0.14,
+    "financial_health":  0.12,
+    "momentum":          0.02,   # can't use TR momentum without TR
+    "relative_strength": 0.00,   # pure price, unaffected, but keep low without TR confirmation
+    "analyst":           0.00,
+    "piotroski":         0.00,
+}
+
+# Track TR availability globally
+_TR_AVAILABLE = True
+
 
 def compute_composite(row: pd.Series, weights: dict = None) -> float:
     if weights is None:
-        weights = CFG["weights"]
+        weights = CFG_WEIGHTS_NO_TR if not _TR_AVAILABLE else CFG["weights"]
     total_w, score = 0.0, 0.0
     for key, col in PILLAR_MAP.items():
         val = row.get(col, np.nan)
@@ -969,7 +980,7 @@ CORE_METRIC_COLS = [
     "freeCashflow", "altman_z", "piotroski_score", "beta",
     "recommendationMean", "fcf_yield", "tr_smart_score",
     "earnings_quality_score", "momentum_composite",
-    "earnings_revision_score",
+    "earnings_revision_score", "shortRatio",
 ]
 
 
@@ -1067,6 +1078,7 @@ EXPORT_COLS = [
     "altman_z", "piotroski_score",
     "recommendationMean", "numberOfAnalystOpinions", "pt_upside",
     "marketCap", "enterpriseValue", "currentPrice", "averageVolume",
+    "shortRatio", "insider_pct_mcap",
     "vs_sector",
 ]
 
@@ -1150,6 +1162,8 @@ FRIENDLY_NAMES = {
     "enterpriseValue":         "EV ($)",
     "currentPrice":            "Price ($)",
     "averageVolume":           "Avg Volume",
+    "shortRatio":              "Short Ratio (Days)",
+    "insider_pct_mcap":        "Insider Buy/Sell % MCap",
     "vs_sector":               "vs Sector Median",
 }
 
@@ -1535,6 +1549,9 @@ def export_json(df: pd.DataFrame):
             "tr_inv_chg_30d": pct(row.get("tr_investor_chg_30d")),
             "tr_inv_chg_7d":  pct(row.get("tr_investor_chg_7d")),
             "tr_mom_12m":     pct(row.get("tr_momentum_12m")),
+            # FIX v5.3: New signals
+            "short_ratio":    safe(row.get("shortRatio")),
+            "insider_pct_mcap": pct(row.get("insider_pct_mcap")),
             "coverage":       pct(row.get("coverage")),
             "vs_sector":      safe(row.get("vs_sector")),
             # Breakout scanner
@@ -1554,6 +1571,8 @@ def export_json(df: pd.DataFrame):
     payload = {
         "generated": datetime.now().strftime("%Y-%m-%d %H:%M UTC"),
         "count":     len(records),
+        "tr_available": _TR_AVAILABLE,
+        "weights_mode": "standard" if _TR_AVAILABLE else "no_tipranks_fallback",
         "data":      records,
     }
     json_path = "artifacts/sp500_data.json"
@@ -1568,7 +1587,7 @@ def export_json(df: pd.DataFrame):
 
 
 def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
-    global _SECTOR_THRESHOLDS
+    global _SECTOR_THRESHOLDS, _TR_AVAILABLE
 
     print("=" * 65)
     print(f"  S&P 500 ADVANCED RANKING v5.2 – GitHub Edition")
@@ -1607,7 +1626,15 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
         tr_df = fetch_tipranks(tickers)
         if not tr_df.empty and "ticker" in tr_df.columns:
             df = df.merge(tr_df, on="ticker", how="left")
+            _tr_coverage = tr_df["tr_smart_score"].notna().sum() / max(len(tickers), 1)
+            if _tr_coverage < 0.10:
+                _TR_AVAILABLE = False
+                print(f"  ⚠️  TR coverage only {_tr_coverage:.0%} — switching to fallback weights")
+            else:
+                _TR_AVAILABLE = True
         else:
+            _TR_AVAILABLE = False
+            print("  ⚠️  TipRanks unavailable — using fundamental-only weights")
             _TR_COLS = list(_parse_tipranks({}).keys())
             for col in _TR_COLS:
                 df[col] = np.nan
@@ -1637,6 +1664,17 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
         df["tr_pt_upside"]           = df.apply(compute_tr_pt_upside,     axis=1)
         df["earnings_quality_score"] = df.apply(compute_earnings_quality, axis=1)
         df["earnings_revision_score"] = df.apply(compute_earnings_revision_score, axis=1)
+
+        # FIX v5.3: Insider buying as % of market cap (stronger signal than directional binary)
+        df["insider_pct_mcap"] = df.apply(
+            lambda r: _safe(r.get("tr_insider_3m_usd")) / _safe(r.get("marketCap"), 1)
+            if _safe(r.get("tr_insider_3m_usd")) and _safe(r.get("marketCap")) > 0 else np.nan,
+            axis=1
+        )
+
+        # FIX v5.3: Ensure eps_revision_pct_30d exists (may not if eps_trend unavailable)
+        if "eps_revision_pct_30d" not in df.columns:
+            df["eps_revision_pct_30d"] = np.nan
 
         # Clip financial outliers (negative equity → crazy ROE, tiny mktcap → crazy FCF yield)
         df["returnOnEquity"] = df["returnOnEquity"].clip(-2.0, 5.0)
