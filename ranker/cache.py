@@ -1,5 +1,5 @@
 # ranker/cache.py — Cache load/save
-import pickle
+import os, pickle
 from datetime import datetime, timedelta
 import pandas as pd
 from ranker.config import CFG, CACHE_FILE
