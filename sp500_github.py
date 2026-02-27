@@ -44,19 +44,25 @@ os.makedirs("artifacts", exist_ok=True)
 # ════════════════════════════════════════════════════════════
 CFG = {
     "weights": {
-        "valuation":         0.16,   # was 0.15 — slight bump, core value signal
-        "profitability":     0.20,   # was 0.18 — absorbed Piotroski weight (most reliable pillar)
-        "growth":            0.14,   # was 0.13 — slight bump
-        "earnings_quality":  0.10,   # was 0.09 — critical for detecting accounting tricks
-        "fcf_quality":       0.13,   # unchanged
-        "financial_health":  0.10,   # unchanged
-        "momentum":          0.09,   # was 0.08 — includes short_ratio signal now
-        "relative_strength": 0.08,   # unchanged
-        "analyst":           0.00,   # was 0.04 — ZEROED: SmartScore has double-count risk; use as tiebreaker only
-        "piotroski":         0.00,   # was 0.02 — ZEROED: proxy-based F-Score without Y/Y data is noise, not signal
+        # ── v5.3 Model Enhancement ──────────────────────────────────
+        # KEY CHANGES:
+        #  • Earnings Revisions promoted to independent pillar (was buried in Growth)
+        #    Research: Zacks 1979, Chan/Jegadeesh/Lakonishok 1996 — strongest short-term alpha factor
+        #  • Analyst revived at 5% — now includes insider_pct_mcap signal (not just SmartScore)
+        #  • Piotroski removed entirely (proxy-based F-Score without Y/Y data = noise)
+        #  • Growth trimmed — Earnings Revisions signals extracted to own pillar
+        "valuation":          0.15,
+        "profitability":      0.19,
+        "growth":             0.10,   # was 0.14 — trimmed: earn_rev signals moved to own pillar
+        "earnings_revisions": 0.10,   # NEW pillar: extracted from Growth (Zacks alpha factor)
+        "earnings_quality":   0.10,
+        "fcf_quality":        0.12,
+        "financial_health":   0.09,
+        "momentum":           0.08,
+        "relative_strength":  0.07,
+        "analyst":            0.00,   # ZEROED: SmartScore double-count risk; computed but not weighted
     },
     "min_coverage":    0.45,
-    "coverage_composite_min": 0.5,   # composite = raw * (this + (1-this)*coverage); 0.5 = 50% floor at 0% coverage
     "min_market_cap":  5_000_000_000,
     "min_avg_volume":  500_000,
     "cache_hours":     24,
@@ -888,15 +894,26 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["s_tr_roe"] = sector_percentile(df, "tr_roe",         True)
     df["pillar_profitability"] = df[["s_roe","s_roa","s_roic","s_pm","s_tr_roe"]].mean(axis=1, skipna=True)
 
-    # 3. Growth — fcf_to_ni REMOVED (was double-counted with FCF pillar)
-    #            replaced with eps_revision_pct_30d (short-term revision velocity, distinct from 90d in EQ)
-    #            + earnings revision score (Zacks-style signal: consensus EPS revisions)
+    # 3. Growth — TRIMMED: earnings revision signals moved to dedicated pillar (3b)
+    #            Now: pure realized growth + forward-looking asset growth
     df["s_rev_g"]        = sector_percentile(df, "revenueGrowth",            True)
     df["s_earn_g"]       = sector_percentile(df, "earningsGrowth",           True)
-    df["s_eps_rev_30d"]  = sector_percentile(df, "eps_revision_pct_30d",     True)   # FIX v5.3: replaces fcf_to_ni (was double-counted); short-term revision velocity
     df["s_tr_asset_g"]   = sector_percentile(df, "tr_asset_growth",          False)  # high asset growth → lower future returns (Titman et al. 2004)
-    df["s_earn_rev"]     = sector_percentile(df, "earnings_revision_score",  True)   # analyst revision breadth + magnitude
-    df["pillar_growth"]  = df[["s_rev_g","s_earn_g","s_eps_rev_30d","s_tr_asset_g","s_earn_rev"]].mean(axis=1, skipna=True)
+    df["pillar_growth"]  = df[["s_rev_g","s_earn_g","s_tr_asset_g"]].mean(axis=1, skipna=True)
+
+    # 3b. Earnings Revisions — NEW INDEPENDENT PILLAR
+    #     Research: Zacks 1979, Chan/Jegadeesh/Lakonishok 1996
+    #     Earnings revisions are among the strongest short-term alpha factors.
+    #     Previously buried inside Growth pillar with only 20% effective weight.
+    #     Now standalone at 10% of composite — gives revisions the weight they deserve.
+    #     Signals:
+    #       - earn_rev_score: breadth (up vs down 30d) + magnitude (EPS change 90d) + acceleration (7d)
+    #       - eps_revision_pct_30d: short-term EPS estimate velocity
+    #       - rev_ratio_30d: raw revision breadth ratio (-1 to +1)
+    df["s_earn_rev"]     = sector_percentile(df, "earnings_revision_score",  True)
+    df["s_eps_rev_30d"]  = sector_percentile(df, "eps_revision_pct_30d",     True)
+    df["s_rev_ratio"]    = sector_percentile(df, "rev_ratio_30d",            True)
+    df["pillar_earnings_revisions"] = df[["s_earn_rev","s_eps_rev_30d","s_rev_ratio"]].mean(axis=1, skipna=True)
 
     # 4. Earnings Quality
     df["s_eq"] = sector_percentile(df, "earnings_quality_score", True)
@@ -923,26 +940,28 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
     df["pillar_momentum"] = df[["s_mom","s_tr_mom12","s_tr_sma","s_short"]].mean(axis=1, skipna=True)
 
     # 8. Analyst + TipRanks Sentiment
-    # FIX v5.3: SmartScore ALREADY aggregates consensus, insider, hedge fund, news sentiment.
-    # Counting them separately = double counting. New structure:
-    #   SmartScore 60% (covers all TR signals), PT Upside avg 25%, Yahoo Analyst 15%
+    # Structure: SmartScore 50%, PT Upside avg 25%, Yahoo Analyst 10%, Insider buying 15%
+    # insider_pct_mcap: insider buying as % of market cap — stronger than binary direction
     df["s_rec"]          = sector_percentile(df, "recommendationMean",   False)
     df["s_pt_upside"]    = sector_percentile(df, "pt_upside",            True)
     df["s_tr_smart"]     = sector_percentile(df, "tr_smart_score",       True)
     df["s_tr_pt"]        = sector_percentile(df, "tr_pt_upside",         True)
+    df["s_insider_mcap"] = sector_percentile(df, "insider_pct_mcap",     True)   # FIX 3.5: was computed but unused
     # PT: average of Yahoo and TipRanks to avoid source bias
     s_pt_avg = df[["s_pt_upside","s_tr_pt"]].mean(axis=1, skipna=True)
     df["pillar_analyst"] = (
-        0.60 * df["s_tr_smart"].fillna(df["s_rec"]) +
+        0.50 * df["s_tr_smart"].fillna(df["s_rec"]) +
         0.25 * s_pt_avg +
-        0.15 * df["s_rec"].fillna(50)
+        0.10 * df["s_rec"].fillna(50) +
+        0.15 * df["s_insider_mcap"].fillna(50)
     )
     # Rescale to 10–100 band (same as sector_percentile output)
     _min, _max = df["pillar_analyst"].min(), df["pillar_analyst"].max()
     if _max > _min:
         df["pillar_analyst"] = ((df["pillar_analyst"] - _min) / (_max - _min)) * 90 + 10
 
-    # 9. Piotroski
+    # 9. Piotroski — DISPLAY ONLY (no weight in composite, removed from PILLAR_MAP)
+    # Still computed for reference in detail panels and Excel export
     df["s_piotroski"]      = sector_percentile(df, "piotroski_score", True)
     df["pillar_piotroski"] = df["s_piotroski"]
 
@@ -960,31 +979,32 @@ def build_pillar_scores(df: pd.DataFrame) -> pd.DataFrame:
 # ════════════════════════════════════════════════════════════
 
 PILLAR_MAP = {
-    "valuation":          "pillar_valuation",
-    "profitability":      "pillar_profitability",
-    "growth":             "pillar_growth",
-    "earnings_quality":   "pillar_earnings_quality",
-    "fcf_quality":        "pillar_fcf",
-    "financial_health":   "pillar_health",
-    "momentum":           "pillar_momentum",
-    "relative_strength":  "pillar_relative_strength",
-    "analyst":            "pillar_analyst",
-    "piotroski":          "pillar_piotroski",
+    "valuation":           "pillar_valuation",
+    "profitability":       "pillar_profitability",
+    "growth":              "pillar_growth",
+    "earnings_revisions":  "pillar_earnings_revisions",    # NEW: independent pillar
+    "earnings_quality":    "pillar_earnings_quality",
+    "fcf_quality":         "pillar_fcf",
+    "financial_health":    "pillar_health",
+    "momentum":            "pillar_momentum",
+    "relative_strength":   "pillar_relative_strength",
+    "analyst":             "pillar_analyst",
+    # Piotroski REMOVED from PILLAR_MAP — still computed for display, but no longer a scoring pillar
 }
 
 # FIX v5.3: Fallback weights when TipRanks data is unavailable
 # Redistributes TR-dependent weight to pure-fundamental pillars
 CFG_WEIGHTS_NO_TR = {
-    "valuation":         0.20,
-    "profitability":     0.24,
-    "growth":            0.16,
-    "earnings_quality":  0.12,
-    "fcf_quality":       0.14,
-    "financial_health":  0.12,
-    "momentum":          0.02,   # can't use TR momentum without TR
-    "relative_strength": 0.00,   # pure price, unaffected, but keep low without TR confirmation
-    "analyst":           0.00,
-    "piotroski":         0.00,
+    "valuation":           0.18,
+    "profitability":       0.22,
+    "growth":              0.12,
+    "earnings_revisions":  0.12,   # fully Yahoo-based — no TR dependency
+    "earnings_quality":    0.12,
+    "fcf_quality":         0.14,
+    "financial_health":    0.10,
+    "momentum":            0.00,   # can't use TR momentum without TR
+    "relative_strength":   0.00,   # keep low without TR confirmation
+    "analyst":             0.00,
 }
 
 # Track TR availability globally
@@ -1120,7 +1140,7 @@ EXPORT_COLS = [
     "rank", "ticker", "name", "sector", "industry",
     "composite_score", "composite_raw", "valuation_score",
     "pillar_valuation", "pillar_profitability", "pillar_growth",
-    "pillar_earnings_quality", "pillar_fcf", "pillar_health",
+    "pillar_earnings_revisions", "pillar_earnings_quality", "pillar_fcf", "pillar_health",
     "pillar_momentum", "pillar_relative_strength", "pillar_analyst", "pillar_piotroski",
     "coverage",
     "tr_smart_score", "tr_analyst_consensus", "tr_consensus_num",
@@ -1158,6 +1178,7 @@ FRIENDLY_NAMES = {
     "pillar_valuation":        "Valuation",
     "pillar_profitability":    "Profitability",
     "pillar_growth":           "Growth",
+    "pillar_earnings_revisions": "Earnings Revisions",
     "pillar_earnings_quality": "Earnings Quality",
     "pillar_fcf":              "FCF Quality",
     "pillar_health":           "Financial Health",
@@ -1544,6 +1565,7 @@ def export_json(df: pd.DataFrame):
             "p_valuation":    safe(row.get("pillar_valuation")),
             "p_profitability":safe(row.get("pillar_profitability")),
             "p_growth":       safe(row.get("pillar_growth")),
+            "p_earn_rev":     safe(row.get("pillar_earnings_revisions")),  # NEW pillar
             "p_eq":           safe(row.get("pillar_earnings_quality")),
             "p_fcf":          safe(row.get("pillar_fcf")),
             "p_health":       safe(row.get("pillar_health")),
