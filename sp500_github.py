@@ -1,8 +1,8 @@
 # ============================================================
-#  S&P 500 ADVANCED RANKING SYSTEM  v5.2 – GitHub Edition
+#  S&P 500 ADVANCED RANKING SYSTEM  v5.3 – GitHub Edition
 #  Headless · Actions Cache · Parallel Fetch · Full Pipeline
 #  Runs as a scheduled GitHub Actions job – no widgets/Colab
-#  Outputs: artifacts/sp500_ranking_v5.2.xlsx + 6 PNGs
+#  Outputs: artifacts/sp500_ranking_v5.3.xlsx + 6 PNGs
 # ============================================================
 
 import subprocess, sys, os, pickle, time, shutil
@@ -63,7 +63,7 @@ CFG = {
     "sleep_tr":        0.35,
     "batch_size_tr":   10,
     "max_workers_yf":  20,
-    "output_file":     "artifacts/sp500_ranking_v5.2.xlsx",
+    "output_file":     "artifacts/sp500_ranking_v5.3.xlsx",
 }
 assert abs(sum(CFG["weights"].values()) - 1.0) < 1e-6, "Weights must sum to 1.0"
 
@@ -251,6 +251,20 @@ def get_sp500_tickers() -> pd.DataFrame:
 # ════════════════════════════════════════════════════════════
 #  YAHOO FINANCE  (parallel)
 # ════════════════════════════════════════════════════════════
+
+# FIX B4: _safe() must be defined before _get_one() which calls it.
+# Previously was defined 200 lines later — worked at runtime but fragile and confusing.
+def _safe(val, default=np.nan):
+    """Safely convert value to float, returning default for None/NaN/non-numeric."""
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        return default if np.isnan(f) else f
+    except Exception:
+        return default
+
+
 FUNDAMENTAL_FIELDS = [
     "trailingPE", "forwardPE", "pegRatio", "priceToSalesTrailing12Months",
     "priceToBook", "enterpriseToEbitda", "returnOnEquity", "returnOnAssets",
@@ -266,6 +280,7 @@ FUNDAMENTAL_FIELDS = [
     "workingCapital", "currentAssets", "currentLiabilities",
     "earningsPerShare", "trailingEps", "revenuePerShare",
     "averageVolume",
+    "operatingIncome",  # FIX B1: needed for accurate ROIC (EBIT-based NOPAT)
 ]
 
 
@@ -459,14 +474,7 @@ def add_price_momentum(df: pd.DataFrame, tickers: list) -> pd.DataFrame:
 #  COMPUTED METRICS
 # ════════════════════════════════════════════════════════════
 
-def _safe(val, default=np.nan):
-    if val is None:
-        return default
-    try:
-        f = float(val)
-        return default if np.isnan(f) else f
-    except Exception:
-        return default
+# _safe() defined above (before Yahoo Finance section) — FIX B4
 
 
 def _coverage(row: pd.Series, cols: list) -> float:
@@ -570,6 +578,10 @@ _ALTMAN_MFG_SECTORS  = {"Industrials", "Energy", "Materials", "Consumer Discreti
 _ALTMAN_SVC_SECTORS  = {"Information Technology", "Health Care",
                          "Communication Services", "Utilities"}
 
+# FIX B3: Explicit set of ALL known S&P 500 GICS sectors for safety validation
+_ALL_KNOWN_SECTORS = _ALTMAN_SKIP_SECTORS | _ALTMAN_MFG_SECTORS | _ALTMAN_SVC_SECTORS
+_altman_unknown_sectors_warned = set()  # track already-warned sectors
+
 
 def compute_altman(row: pd.Series) -> float:
     """
@@ -632,6 +644,12 @@ def compute_altman(row: pd.Series) -> float:
             x5 = rev / ta
             return round(1.2*x1 + 1.4*x2 + 3.3*x3 + 0.6*x4 + 1.0*x5, 3)
 
+        # ── FIX B3: Warn if sector is unknown (not in any known set) ────
+        if sector and sector not in _ALL_KNOWN_SECTORS and sector not in _altman_unknown_sectors_warned:
+            _altman_unknown_sectors_warned.add(sector)
+            print(f"  ⚠️  Altman Z: unknown sector '{sector}' — using Z'' (service) model as fallback. "
+                  f"Add to _ALTMAN_MFG_SECTORS or _ALTMAN_SVC_SECTORS for correct model.")
+
         # ── Z'' model: service / asset-light sectors (default) ───────────
         return round(6.56*x1 + 3.26*x2 + 6.72*x3 + 1.05*x4, 3)
 
@@ -640,14 +658,57 @@ def compute_altman(row: pd.Series) -> float:
 
 
 def compute_roic(row: pd.Series) -> float:
+    """
+    Return on Invested Capital = NOPAT / Invested Capital
+
+    FIX B1: The old formula used EBITDA * 0.82 * (1 - tax) as NOPAT proxy,
+    where 0.82 was a fixed D&A-to-EBITDA ratio. This penalized asset-light
+    companies (Tech D&A ~5% of EBITDA) and rewarded asset-heavy ones
+    (Industrials D&A ~25%).
+
+    New approach (priority order):
+    1. operatingIncome * (1 - tax) — best available proxy if Yahoo provides it
+    2. EBITDA * sector_da_ratio * (1 - tax) — sector-aware fallback
+    3. EBITDA * 0.82 * (1 - tax) — legacy fallback if sector unknown
+    """
+    TAX_RATE = 0.21
+    # Sector-specific D&A-to-EBITDA retention ratios (1 - D&A/EBITDA)
+    # Source: Damodaran sector averages, rounded for stability
+    _SECTOR_DA_RATIO = {
+        "Information Technology":    0.90,   # low D&A — asset-light
+        "Communication Services":    0.80,   # moderate (media assets)
+        "Health Care":               0.85,   # moderate (R&D-heavy but capitalized)
+        "Financials":                0.95,   # very low D&A
+        "Consumer Discretionary":    0.78,   # moderate-high (retail, auto)
+        "Consumer Staples":          0.80,   # moderate
+        "Industrials":               0.75,   # high D&A — asset-heavy
+        "Energy":                    0.65,   # very high D&A (PP&E intensive)
+        "Materials":                 0.70,   # high D&A
+        "Real Estate":               0.60,   # very high D&A (depreciation of properties)
+        "Utilities":                 0.65,   # very high D&A (infrastructure)
+    }
     try:
-        ebitda  = _safe(row.get("ebitda"))
         equity  = _safe(row.get("totalStockholdersEquity"), 0)
         debt    = _safe(row.get("totalDebt"), 0)
         cash    = _safe(row.get("totalCash"), 0)
-        nopat   = ebitda * 0.82 * (1 - 0.21)
         inv_cap = equity + debt - cash
-        return nopat / inv_cap if inv_cap > 1e6 else np.nan
+        if inv_cap <= 1e6:
+            return np.nan
+
+        # Priority 1: Operating Income (EBIT) if available
+        op_income = _safe(row.get("operatingIncome"))
+        if not np.isnan(op_income):
+            nopat = op_income * (1 - TAX_RATE)
+            return nopat / inv_cap
+
+        # Priority 2: EBITDA with sector-aware D&A ratio
+        ebitda = _safe(row.get("ebitda"))
+        if np.isnan(ebitda):
+            return np.nan
+        sector = row.get("sector", "") or ""
+        da_ratio = _SECTOR_DA_RATIO.get(sector, 0.82)  # legacy fallback
+        nopat = ebitda * da_ratio * (1 - TAX_RATE)
+        return nopat / inv_cap
     except Exception:
         return np.nan
 
@@ -657,10 +718,16 @@ def compute_fcf_metrics(row: pd.Series) -> dict:
     rev = _safe(row.get("totalRevenue"))
     ni  = _safe(row.get("netIncomeToCommon"))
     mc  = _safe(row.get("marketCap"))
+    # FIX B2: Python truthy bug — `(0 and x)` = 0 (falsy), so FCF=0 was silently
+    # mapped to NaN instead of 0.0. Use explicit NaN checks + denominator > 0.
+    def _ratio(numerator, denominator):
+        if np.isnan(numerator) or np.isnan(denominator) or denominator <= 0:
+            return np.nan
+        return numerator / denominator
     return {
-        "fcf_yield":  fcf / mc  if (fcf and mc  > 0) else np.nan,
-        "fcf_margin": fcf / rev if (fcf and rev > 0) else np.nan,
-        "fcf_to_ni":  fcf / ni  if (fcf and ni  > 0) else np.nan,
+        "fcf_yield":  _ratio(fcf, mc),
+        "fcf_margin": _ratio(fcf, rev),
+        "fcf_to_ni":  _ratio(fcf, ni),
     }
 
 
@@ -1267,7 +1334,7 @@ def plot_all(df: pd.DataFrame):
                      color=colors[::-1], edgecolor="white")
     ax.set_xlim(0, 108)
     ax.set_xlabel("Composite Score", fontsize=12)
-    ax.set_title("Top 30 S&P 500 – Composite Score v5.2", fontsize=14, fontweight="bold")
+    ax.set_title("Top 30 S&P 500 – Composite Score v5.3", fontsize=14, fontweight="bold")
     for bar, s in zip(bars, top30["composite_score"][::-1]):
         ax.text(bar.get_width() + 0.4, bar.get_y() + bar.get_height() / 2,
                 f"{s:.1f}", va="center", fontsize=8)
@@ -1368,7 +1435,7 @@ def _plot_radar(df_top: pd.DataFrame):
         ax.set_title(f"{row['ticker']}\n{row['composite_score']:.1f}{ss_str}",
                      size=9, fontweight="bold", pad=10)
 
-    fig.suptitle("Pillar Breakdown – Top 5 (v5.2)", fontsize=13, fontweight="bold")
+    fig.suptitle("Pillar Breakdown – Top 5 (v5.3)", fontsize=13, fontweight="bold")
     plt.tight_layout()
     plt.savefig("artifacts/top5_radar.png", dpi=150)
     plt.close()
@@ -1590,7 +1657,7 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
     global _SECTOR_THRESHOLDS, _TR_AVAILABLE
 
     print("=" * 65)
-    print(f"  S&P 500 ADVANCED RANKING v5.2 – GitHub Edition")
+    print(f"  S&P 500 ADVANCED RANKING v5.3 – GitHub Edition")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print("=" * 65)
 
@@ -1716,9 +1783,22 @@ def run_pipeline(use_cache: bool = True) -> pd.DataFrame:
         save_cache(df)
 
     # 12. Coverage-weighted composite + rank + sector context (always, so cache and fresh runs match)
-    cmin = CFG.get("coverage_composite_min", 0.5)
+    # FIX B5: Old formula `composite * (0.5 + 0.5 * coverage)` double-penalized stocks
+    # because compute_composite already handles missing pillars by renormalizing weights.
+    # The multiplicative coverage penalty on top punished disproportionately.
+    #
+    # New approach: only apply penalty below a threshold (70% coverage).
+    # Above 70% = no penalty. Below 70% = gentle linear discount capped at 15%.
+    cov = df["coverage"].fillna(0)
+    COVERAGE_THRESHOLD = 0.70
+    MAX_PENALTY = 0.15  # max 15% discount for worst coverage
+    coverage_factor = np.where(
+        cov >= COVERAGE_THRESHOLD,
+        1.0,  # no penalty
+        1.0 - MAX_PENALTY * (1.0 - cov / COVERAGE_THRESHOLD)  # linear 0–15% discount
+    )
     df["composite_raw"] = df["composite_score"].copy()
-    df["composite_score"] = df["composite_score"] * (cmin + (1.0 - cmin) * df["coverage"].fillna(0))
+    df["composite_score"] = df["composite_score"] * coverage_factor
     df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
     df["rank"] = df.index + 1
     df = add_sector_context(df)
