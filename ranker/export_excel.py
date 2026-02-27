@@ -4,7 +4,7 @@ import pandas as pd
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import ColorScaleRule
-from ranker.config import EXPORT_COLS, FRIENDLY_NAMES, PCT_COLS_DECIMAL, PCT_COLS_FRACTION, ALL_PCT_COLS
+from ranker.config import EXPORT_COLS, FRIENDLY_NAMES, PCT_COLS_DECIMAL, PCT_COLS_FRACTION, ALL_PCT_COLS, PILLAR_MAP
 
 def style_and_export(df: pd.DataFrame, filepath: str):
     out_df = df.reindex(columns=[c for c in EXPORT_COLS if c in df.columns])
