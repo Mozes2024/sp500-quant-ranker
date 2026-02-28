@@ -5,6 +5,7 @@ on:
   schedule:
     - cron: "15 0 * * 1-5"  # Weekdays 00:15 UTC
   repository_dispatch:
+    types: [breakout_signals_ready]
 
 permissions:
   contents: write
@@ -26,6 +27,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Log trigger source
+        run: |
+          echo "── Trigger info ──"
+          echo "Event: ${{ github.event_name }}"
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "Type: ${{ github.event.action }}"
+            echo "Scan date: ${{ github.event.client_payload.scan_date }}"
+            echo "🔔 Triggered by MOZES_stock-screener breakout signals"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "⏰ Scheduled daily run"
+          else
+            echo "🖱️ Manual dispatch"
+          fi
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -45,15 +60,20 @@ jobs:
           restore-keys: |
             sp500-cache-v9-${{ runner.os }}-
 
-      - name: Ensure breakout_signals.json exists (from screener)
+      - name: Fetch breakout_signals.json from screener
         run: |
+          echo "── Fetching breakout_signals.json ──"
+
+          # תמיד מביא גרסה טרייה מהסקרינר (מקור האמת היחיד)
+          curl -sf "https://raw.githubusercontent.com/Mozes2024/MOZES_stock-screener/main/breakout_signals.json" \
+            -o breakout_signals.json
+
           if [ -f "breakout_signals.json" ]; then
             SIGNALS=$(python3 -c "import json; d=json.load(open('breakout_signals.json')); print(d.get('top_signals_count', 0))")
             SCAN=$(python3 -c "import json; d=json.load(open('breakout_signals.json')); print(d.get('scan_date',''))")
-            echo "✅ breakout_signals.json present: ${SIGNALS} signals (scan: ${SCAN})"
+            echo "✅ breakout_signals.json: ${SIGNALS} signals (scan: ${SCAN})"
           else
-            echo "⚠ breakout_signals.json missing — fetching from screener..."
-            curl -sf "https://raw.githubusercontent.com/Mozes2024/MOZES_stock-screener/main/breakout_signals.json"               -o breakout_signals.json && echo "✅ Fetched from screener" || echo "⚠ Not available (breakout tab will be empty)"
+            echo "⚠️ breakout_signals.json not available — breakout tab will be empty"
           fi
 
       - name: Run ranking pipeline
