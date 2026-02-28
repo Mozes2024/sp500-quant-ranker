@@ -151,7 +151,7 @@ td{padding:11px 8px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis
 tbody tr.double-signal-row{background:linear-gradient(90deg,rgba(245,166,35,.08) 0%,transparent 70%);border-left:3px solid var(--gold);}
 tbody tr.double-signal-row:hover{background:linear-gradient(90deg,rgba(245,166,35,.15) 0%,var(--surface2) 60%);}
 tbody tr.double-signal-row.expanded{background:linear-gradient(90deg,rgba(245,166,35,.15) 0%,var(--surface2) 60%);}
-.ds-badge{display:inline-flex;align-items:center;justify-content:center;width:10px;height:10px;background:var(--gold);border-radius:50%;margin-right:4px;flex-shrink:0;vertical-align:middle;font-size:0;line-height:1;cursor:default;}
+.ds-badge{display:inline-block;width:7px;height:7px;background:var(--gold);border-radius:50%;margin-right:5px;flex-shrink:0;vertical-align:middle;}
 
 /* ── Breakout-only row ── */
 tbody tr.breakout-only-row{border-left:3px solid var(--teal);}
@@ -269,7 +269,7 @@ tbody tr.watched{background:rgba(245,166,35,.03);}
   <div class="filter-group"><div class="filter-label" id="lbl-f-pe">P/E Max</div><input type="number" id="fPEMax" placeholder="e.g. 25" class="filter-input"></div>
   <div class="filter-group"><div class="filter-label" id="lbl-f-perf">12M Return Min %</div><input type="number" id="fPerfMin" placeholder="e.g. 10" class="filter-input"></div>
   <div class="filter-group"><div class="filter-label" id="lbl-f-valuation">Val. Score Min</div><input type="number" id="fValMin" placeholder="e.g. 60" class="filter-input"></div>
-  <div class="filter-group"><div class="filter-label">Mkt Cap Min ($B)</div><select id="fMktCap" class="filter-select"><option value="">Any</option><option value="300e9">Mega ≥$300B</option><option value="50e9">Large ≥$50B</option><option value="10e9" selected>Mid ≥$10B</option><option value="2e9">Small ≥$2B</option></select></div>
+  <div class="filter-group"><div class="filter-label">Mkt Cap Min</div><select id="fMktCap" class="filter-select"><option value="">Any</option><option value="300000000000">Mega ≥$300B</option><option value="50000000000">Large ≥$50B</option><option value="10000000000" selected>Mid ≥$10B</option><option value="2000000000">Small ≥$2B</option></select></div>
   <button class="filter-reset" onclick="resetFilters()" id="lbl-f-reset">✕ Reset</button>
 </div>
 <div class="view-tabs" id="viewTabs" style="display:none"></div>
@@ -421,7 +421,7 @@ function buildSectorSelect(){
 function buildViewTabs(){const c=document.getElementById('viewTabs');c.innerHTML='';const bCount=allData.filter(d=>valid(d.breakout_score)).length;const bTotal=breakoutMeta?breakoutMeta.total_buy_signals:null;const wCount=watchlist.size;Object.keys(buildViews()).forEach(view=>{const btn=document.createElement('button');btn.className='view-tab'+(view===currentView?' active':'');if(view==='breakout'){const num=bTotal||bCount;btn.innerHTML=`${ttab(view)} <span style="background:var(--teal);color:#000;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:3px">${num}</span>`;}else if(view==='watchlist'&&wCount>0){btn.innerHTML=`${ttab(view)} <span style="background:var(--gold);color:#000;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:3px">${wCount}</span>`;}else{btn.textContent=ttab(view);}btn.dataset.view=view;btn.addEventListener('click',()=>{document.querySelectorAll('.view-tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');currentView=view;sortCol='rank';sortAsc=true;renderTable();});c.appendChild(btn);});}
 
 function toggleFilter(){const panel=document.getElementById('filterPanel'),btn=document.getElementById('filterToggle');const open=panel.classList.toggle('open');btn.classList.toggle('open',open);}
-function resetFilters(){['fCompMin','fCompMax','fSSMin','fConsensus','fPEMax','fPerfMin','fValMin'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});renderTable();}
+function resetFilters(){['fCompMin','fCompMax','fSSMin','fConsensus','fPEMax','fPerfMin','fValMin'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});const mc=document.getElementById('fMktCap');if(mc)mc.value='10000000000';renderTable();}
 function getFilters(){return{compMin:parseFloat(document.getElementById('fCompMin').value)||null,compMax:parseFloat(document.getElementById('fCompMax').value)||null,ssMin:parseFloat(document.getElementById('fSSMin').value)||null,consensus:document.getElementById('fConsensus').value||null,peMax:parseFloat(document.getElementById('fPEMax').value)||null,perfMin:parseFloat(document.getElementById('fPerfMin').value)||null,valMin:parseFloat(document.getElementById('fValMin').value)||null,mktCapMin:parseFloat(document.getElementById('fMktCap').value)||null};}
 
 function applyFilter(){let data=[...allData];const f=getFilters();if(currentSector!=='ALL')data=data.filter(d=>d.sector===currentSector);if(currentSearch){const q=currentSearch.toUpperCase();const exactTicker=data.find(d=>d.ticker===q);if(exactTicker){data=[exactTicker];}else{data=data.filter(d=>d.ticker.startsWith(q)||(d.company||'').toLowerCase().includes(currentSearch));}}if(f.compMin!==null)data=data.filter(d=>(d.composite||0)>=f.compMin);if(f.compMax!==null)data=data.filter(d=>(d.composite||0)<=f.compMax);if(f.ssMin!==null)data=data.filter(d=>(d.tr_smartscore||0)>=f.ssMin);if(f.consensus)data=data.filter(d=>(d.tr_consensus||'')===f.consensus||(d.tr_consensus||'').includes(f.consensus.replace('Buy','').trim()));if(f.peMax!==null)data=data.filter(d=>valid(d.pe)&&parseFloat(d.pe)<=f.peMax);if(f.perfMin!==null)data=data.filter(d=>valid(d.perf_12m)&&parseFloat(d.perf_12m)>=f.perfMin);if(f.valMin!==null)data=data.filter(d=>(d.valuation||0)>=f.valMin);
@@ -477,10 +477,10 @@ function renderTable(){
     const sLabel=lang==='he'?(sMap[d.sector]||d.sector):(d.sector||'');
     const isBreakout=valid(d.breakout_score);
     const doubleSignal=isBreakout&&(d.composite||0)>=65;
-    const dsBadge=doubleSignal?'<span class="ds-badge" title="⚡ Double Signal: Breakout Scanner + High Composite Score"></span>':'';
+    const dsBadge=doubleSignal?'<span class="ds-badge" title="Double Signal: Breakout + High Score"></span>':'';
     const isStarred=watchlist.has(d.ticker);
     const starBtn=`<button class="star-btn ${isStarred?'starred':''}" onclick="toggleStar('${d.ticker}',event)" title="Add to watchlist">${isStarred?'★':'☆'}</button>`;
-    let cells=`<td class="td-rank ${d.rank<=3?'top3':''}">${d.rank}</td><td class="td-ticker" style="vertical-align:middle"><div style="display:flex;align-items:center;gap:2px">${dsBadge}${starBtn}<a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank" onclick="event.stopPropagation()">${d.ticker}</a></div></td><td class="td-company" title="${d.company||''}">${(d.company||'').substring(0,24)}</td><td><span class="sector-pill" style="background:${sc.bg};color:${sc.color}">${sLabel}</span></td>`;
+    let cells=`<td class="td-rank ${d.rank<=3?'top3':''}">${d.rank}</td><td class="td-ticker" style="vertical-align:middle"><div style="display:flex;align-items:center">${dsBadge}${starBtn}<a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank" onclick="event.stopPropagation()">${d.ticker}</a></div></td><td class="td-company" title="${d.company||''}">${(d.company||'').substring(0,24)}</td><td><span class="sector-pill" style="background:${sc.bg};color:${sc.color}">${sLabel}</span></td>`;
     cols.forEach(c=>{const raw=d[c.key];const content=c.fmt?c.fmt(raw):(valid(raw)?raw:'—');const cls=c.cls?(typeof c.cls==='function'?c.cls(raw):c.cls):'';cells+=`<td class="td-num ${cls}">${content}</td>`;});
     const tr=document.createElement('tr');
     if(doubleSignal)tr.classList.add('double-signal-row');
