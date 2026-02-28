@@ -477,7 +477,7 @@ function renderTable(){
     const sLabel=lang==='he'?(sMap[d.sector]||d.sector):(d.sector||'');
     const isBreakout=valid(d.breakout_score);
     const doubleSignal=isBreakout&&(d.composite||0)>=65;
-    const dsBadge=doubleSignal?'<span class="ds-badge" title="Double Signal: Breakout + High Score"></span>':'';
+    const dsBadge='';
     const isStarred=watchlist.has(d.ticker);
     const starBtn=`<button class="star-btn ${isStarred?'starred':''}" onclick="toggleStar('${d.ticker}',event)" title="Add to watchlist">${isStarred?'★':'☆'}</button>`;
     let cells=`<td class="td-rank ${d.rank<=3?'top3':''}">${d.rank}</td><td class="td-ticker" style="vertical-align:middle"><div style="display:flex;align-items:center">${dsBadge}${starBtn}<a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank" onclick="event.stopPropagation()">${d.ticker}</a></div></td><td class="td-company" title="${d.company||''}">${(d.company||'').substring(0,24)}</td><td><span class="sector-pill" style="background:${sc.bg};color:${sc.color}">${sLabel}</span></td>`;
