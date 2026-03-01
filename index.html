@@ -81,7 +81,7 @@ tbody tr{border-bottom:1px solid #0a1520;transition:background .1s;cursor:pointe
 tbody tr:hover{background:var(--surface2);}
 tbody tr.expanded{background:var(--surface2);}
 td{padding:11px 8px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.td-rank{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text3);text-align:center;}
+.td-rank{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text3);text-align:center;position:relative;}
 .td-rank.top3{color:var(--gold2);}
 .td-ticker{font-family:var(--mono);font-size:14px;font-weight:800;color:#fff;}
 .td-ticker a{color:inherit;text-decoration:none;border-bottom:1px solid transparent;transition:all .15s;}
@@ -151,7 +151,7 @@ td{padding:11px 8px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis
 tbody tr.double-signal-row{background:transparent;border-left:none;}
 tbody tr.double-signal-row:hover{background:var(--surface2);}
 tbody tr.double-signal-row.expanded{background:var(--surface2);}
-.ds-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;font-size:9px;line-height:1;background:linear-gradient(135deg,#f5a623,#ff6b35);color:#000;border-radius:4px;margin-right:5px;flex-shrink:0;font-weight:900;}
+.ds-badge{position:absolute;top:2px;left:2px;width:8px;height:8px;background:var(--gold);border-radius:50%;flex-shrink:0;pointer-events:none;}
 
 /* ── Breakout-only row ── */
 tbody tr.breakout-only-row{border-left:3px solid var(--teal);}
@@ -480,7 +480,7 @@ function renderTable(){
     const dsBadge=doubleSignal?'<span class="ds-badge" title="Double Signal: Breakout + High Composite">⚡</span>':'';
     const isStarred=watchlist.has(d.ticker);
     const starBtn=`<button class="star-btn ${isStarred?'starred':''}" onclick="toggleStar('${d.ticker}',event)" title="Add to watchlist">${isStarred?'★':'☆'}</button>`;
-    let cells=`<td class="td-rank ${d.rank<=3?'top3':''}">${d.rank}</td><td class="td-ticker" style="vertical-align:middle"><div style="display:flex;align-items:center">${dsBadge}${starBtn}<a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank" onclick="event.stopPropagation()">${d.ticker}</a></div></td><td class="td-company" title="${d.company||''}">${(d.company||'').substring(0,24)}</td><td><span class="sector-pill" style="background:${sc.bg};color:${sc.color}">${sLabel}</span></td>`;
+    let cells=`<td class="td-rank ${d.rank<=3?'top3':''}">${dsBadge}${d.rank}</td><td class="td-ticker" style="vertical-align:middle"><div style="display:flex;align-items:center">${starBtn}<a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank" onclick="event.stopPropagation()">${d.ticker}</a></div></td><td class="td-company" title="${d.company||''}">${(d.company||'').substring(0,24)}</td><td><span class="sector-pill" style="background:${sc.bg};color:${sc.color}">${sLabel}</span></td>`;
     cols.forEach(c=>{const raw=d[c.key];const content=c.fmt?c.fmt(raw):(valid(raw)?raw:'—');const cls=c.cls?(typeof c.cls==='function'?c.cls(raw):c.cls):'';cells+=`<td class="td-num ${cls}">${content}</td>`;});
     const tr=document.createElement('tr');
     if(doubleSignal)tr.classList.add('double-signal-row');
