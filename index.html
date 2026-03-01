@@ -170,12 +170,12 @@ tbody tr.breakout-only-row:hover{background:var(--surface2);}
 .regime-risk-off{color:var(--red);}
 .regime-divider{width:1px;height:28px;background:var(--border);}
 
-/* ── v5.3: Stale data banner ── */
+/* ── v5.4: Stale data banner ── */
 .stale-banner{display:none;padding:10px 28px;background:linear-gradient(90deg,#2e2200,#1a1400);border-bottom:2px solid #f5a623;color:#ffc15e;font-size:13px;font-weight:600;align-items:center;gap:10px;}
 .stale-banner.show{display:flex;}
 .stale-icon{font-size:18px;}
 
-/* ── v5.3: Compare mode ── */
+/* ── v5.4: Compare mode ── */
 .compare-bar{display:none;padding:10px 28px;background:linear-gradient(90deg,#0d2137,#0c1520);border-bottom:2px solid var(--blue);align-items:center;gap:12px;position:sticky;top:61px;z-index:250;}
 .compare-bar.show{display:flex;}
 .compare-chip{display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--blue);border-radius:16px;padding:4px 12px;font-family:var(--mono);font-size:12px;font-weight:700;color:var(--blue);}
@@ -185,7 +185,7 @@ tbody tr.breakout-only-row:hover{background:var(--surface2);}
 .compare-btn:disabled{opacity:.4;cursor:not-allowed;}
 .compare-cancel{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text3);font-size:12px;cursor:pointer;}
 
-/* ── v5.3: Compare modal ── */
+/* ── v5.4: Compare modal ── */
 .compare-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:999;overflow-y:auto;padding:40px;}
 .compare-modal.show{display:block;}
 .compare-inner{max-width:1200px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;}
@@ -197,17 +197,17 @@ tbody tr.breakout-only-row:hover{background:var(--surface2);}
 .compare-grid .cg-ticker{font-family:var(--mono);font-size:16px;font-weight:800;color:#fff;}
 .compare-grid .cg-best{color:var(--teal);font-weight:800;}
 
-/* ── v5.3: Watchlist star ── */
+/* ── v5.4: Watchlist star ── */
 .star-btn{background:none;border:none;cursor:pointer;font-size:16px;padding:0 4px;color:var(--gold);opacity:.55;transition:all .15s;}
 .star-btn:hover{opacity:.8;}
 .star-btn.starred{opacity:1;color:var(--gold);}
 tbody tr.watched{background:rgba(245,166,35,.03);}
 
-/* ── v5.3: Action buttons (export, theme) ── */
+/* ── v5.4: Action buttons (export, theme) ── */
 .action-btn{padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text3);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;}
 .action-btn:hover{border-color:var(--gold);color:var(--gold);}
 
-/* ── v5.3: Light theme ── */
+/* ── v5.4: Light theme ── */
 :root[data-theme="light"]{
   --bg:#f4f6f9;--surface:#fff;--surface2:#f0f2f5;--surface3:#e8ecf0;
   --border:#d0d7de;--border2:#c0c8d0;
@@ -227,7 +227,7 @@ tbody tr.watched{background:rgba(245,166,35,.03);}
 <header>
   <div class="logo-block">
     <div class="logo-title">S&amp;P 500 <span class="logo-accent">Mozes</span> Ranker</div>
-    <div class="logo-sub">v5.3 · 9-Pillar + Breakout Scanner</div>
+    <div class="logo-sub">v5.4 · 10-Pillar + Breakout Scanner</div>
   </div>
   <div class="header-right">
     <div class="last-updated" id="lastUpdated"><span class="live-dot"></span>Loading...</div>
@@ -573,7 +573,7 @@ function buildDetailPanel(d){
 function switchDetailTab(ticker,tab){const tc=document.getElementById(`dtabs-${ticker}`);if(!tc)return;tc.querySelectorAll('.detail-tab').forEach(t=>{t.classList.toggle('active',t.dataset.dtab===tab);});['overview','pillars','valuation','tipranks','breakout'].forEach(t=>{const el=document.getElementById(`dtab-${ticker}-${t}`);if(el)el.style.display=t===tab?'block':'none';});}
 
 // ═══════════════════════════════════════════════════════════
-//  v5.3: STALE DATA CHECK
+//  v5.4: STALE DATA CHECK
 // ═══════════════════════════════════════════════════════════
 function checkDataFreshness(generatedStr){
   if(!generatedStr)return;
@@ -592,7 +592,7 @@ function checkDataFreshness(generatedStr){
 }
 
 // ═══════════════════════════════════════════════════════════
-//  v5.3: WATCHLIST (localStorage)
+//  v5.4: WATCHLIST (localStorage)
 // ═══════════════════════════════════════════════════════════
 let watchlist=new Set();
 let watchlistData={};
@@ -613,7 +613,7 @@ function toggleStar(ticker,ev){
 loadWatchlist();
 
 // ═══════════════════════════════════════════════════════════
-//  v5.3: COMPARE MODE
+//  v5.4: COMPARE MODE
 // ═══════════════════════════════════════════════════════════
 let compareMode=false, compareList=[];
 function toggleCompareMode(){
@@ -708,7 +708,7 @@ document.addEventListener('click',e=>{
 });
 
 // ═══════════════════════════════════════════════════════════
-//  v5.3: EXPORT CSV
+//  v5.4: EXPORT CSV
 // ═══════════════════════════════════════════════════════════
 function exportCSV(){
   const filtered=applyFilter();
@@ -729,7 +729,7 @@ function exportCSV(){
 }
 
 // ═══════════════════════════════════════════════════════════
-//  v5.3: THEME TOGGLE
+//  v5.4: THEME TOGGLE
 // ═══════════════════════════════════════════════════════════
 function toggleTheme(){
   const root=document.documentElement;
