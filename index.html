@@ -148,10 +148,10 @@ td{padding:11px 8px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
 
 /* ── Double Signal row ── */
-tbody tr.double-signal-row{background:linear-gradient(90deg,rgba(245,166,35,.08) 0%,transparent 70%);border-left:3px solid var(--gold);}
-tbody tr.double-signal-row:hover{background:linear-gradient(90deg,rgba(245,166,35,.15) 0%,var(--surface2) 60%);}
-tbody tr.double-signal-row.expanded{background:linear-gradient(90deg,rgba(245,166,35,.15) 0%,var(--surface2) 60%);}
-.ds-badge{display:inline-block;width:7px;height:7px;background:var(--gold);border-radius:50%;margin-right:5px;flex-shrink:0;vertical-align:middle;}
+tbody tr.double-signal-row{background:transparent;border-left:none;}
+tbody tr.double-signal-row:hover{background:var(--surface2);}
+tbody tr.double-signal-row.expanded{background:var(--surface2);}
+.ds-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;font-size:9px;line-height:1;background:linear-gradient(135deg,#f5a623,#ff6b35);color:#000;border-radius:4px;margin-right:5px;flex-shrink:0;font-weight:900;}
 
 /* ── Breakout-only row ── */
 tbody tr.breakout-only-row{border-left:3px solid var(--teal);}
@@ -477,7 +477,7 @@ function renderTable(){
     const sLabel=lang==='he'?(sMap[d.sector]||d.sector):(d.sector||'');
     const isBreakout=valid(d.breakout_score);
     const doubleSignal=isBreakout&&(d.composite||0)>=65;
-    const dsBadge='';
+    const dsBadge=doubleSignal?'<span class="ds-badge" title="Double Signal: Breakout + High Composite">⚡</span>':'';
     const isStarred=watchlist.has(d.ticker);
     const starBtn=`<button class="star-btn ${isStarred?'starred':''}" onclick="toggleStar('${d.ticker}',event)" title="Add to watchlist">${isStarred?'★':'☆'}</button>`;
     let cells=`<td class="td-rank ${d.rank<=3?'top3':''}">${d.rank}</td><td class="td-ticker" style="vertical-align:middle"><div style="display:flex;align-items:center">${dsBadge}${starBtn}<a href="https://finance.yahoo.com/quote/${d.ticker}" target="_blank" onclick="event.stopPropagation()">${d.ticker}</a></div></td><td class="td-company" title="${d.company||''}">${(d.company||'').substring(0,24)}</td><td><span class="sector-pill" style="background:${sc.bg};color:${sc.color}">${sLabel}</span></td>`;
