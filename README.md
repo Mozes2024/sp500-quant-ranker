@@ -1,6 +1,6 @@
 <div dir="rtl" align="right">
 
-# 🏆 מערכת דירוג כמותי — S&P 500 Quant Ranker v5.3
+# 🏆 מערכת דירוג כמותי — S&P 500 Quant Ranker v5.4
 
 ### @MOZES Edition
 
