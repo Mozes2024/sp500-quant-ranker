@@ -1,4 +1,4 @@
-name: Daily S&P 500 Ranking v5.3
+name: Daily S&P 500 Ranking v5.4
 
 on:
   workflow_dispatch:
